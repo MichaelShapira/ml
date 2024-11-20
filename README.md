@@ -1,4 +1,4 @@
-# ml
+# Classic Machine Learning applications
 Mostly non generative AI related content
 
 The "yolo" directory contains the notebook about how to train the YOLO11 model to detect sign language and how to deploy this model to the Amazon SageMaker Endpoint.
