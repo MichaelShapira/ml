@@ -8,5 +8,6 @@ The "yolo" directory contains the notebook about how to train the YOLO11 model t
 
 ## 2. YOLO Neuron
 The "yolo_neuron" contains the notebook from the "yolo" notebook. This model was recompiled with Neuron SDK to support Inferentia2 hardware.
+
 <img width="906" alt="image" src="https://github.com/user-attachments/assets/3d6b29ad-935f-4ad0-bd12-ed750aad00a4">
 
