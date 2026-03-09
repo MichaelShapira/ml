@@ -52,6 +52,10 @@ Located in the same directory as this notebook:
 - `astro.jpg` — sample input image
 - `demo_astronaut.mp4` — sample output video
 
+**Input image:**
+
+![astro.jpg](astro.jpg)
+
 ## Prerequisites
 
 - SageMaker execution role with S3 and ECR access
