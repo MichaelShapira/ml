@@ -1,0 +1,4 @@
+git+https://github.com/huggingface/diffusers
+transformers>=4.40.0
+accelerate
+sentencepiece
