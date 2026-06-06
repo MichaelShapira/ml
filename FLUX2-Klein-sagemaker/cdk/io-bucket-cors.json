@@ -1,0 +1,27 @@
+{
+  "CORSRules": [
+    {
+      "AllowedHeaders": ["*"],
+      "AllowedMethods": ["POST", "PUT", "GET", "HEAD", "DELETE"],
+      "AllowedOrigins": ["https://*.sagemaker.aws", "http://localhost:3000"],
+      "ExposeHeaders": [
+        "ETag",
+        "x-amz-delete-marker",
+        "x-amz-id-2",
+        "x-amz-request-id",
+        "x-amz-server-side-encryption",
+        "x-amz-version-id"
+      ]
+    },
+    {
+      "AllowedHeaders": ["*"],
+      "AllowedMethods": ["GET", "PUT", "HEAD"],
+      "AllowedOrigins": [
+        "https://d1wzenbghyc6sk.cloudfront.net",
+        "http://localhost:5173",
+        "http://localhost:5174"
+      ],
+      "ExposeHeaders": ["ETag"]
+    }
+  ]
+}

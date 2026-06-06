@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------------------
+# Inference dependencies for FLUX.2 [klein] 9B on a SageMaker PyTorch DLC.
+#
+# DO NOT add `torch` here. PyTorch is provided by the DLC and is the ONLY
+# component compiled for the GPU architecture:
+#   - g6e (NVIDIA L40S, Ada sm_89)        -> PyTorch 2.5 DLC (CUDA 12.x)
+#   - g7e (NVIDIA RTX PRO 6000 Blackwell,  -> PyTorch >= 2.7 DLC (CUDA 12.8+)
+#          sm_120)
+# A pip-installed torch would overwrite the DLC's CUDA-matched build and
+# reintroduce "CUDA error: no kernel image is available for execution on the
+# device". Let the container own torch; everything below is pure-Python or
+# CPU-only and works identically on the 2.5 and 2.7 stacks.
+#
+# Pins are deterministic on purpose: the SageMaker toolkit runs
+# `pip install -r requirements.txt` (no --upgrade) on every cold start, so an
+# unbounded `>=` can silently resolve a new major months later and break a
+# previously-working endpoint. Exact pins where it matters, capped ranges
+# otherwise.
+# ---------------------------------------------------------------------------
+
+# Flux2KleinPipeline first shipped in the diffusers 0.38.0 release. Pinning the
+# wheel (vs building from git) removes ~6 min and the backtracking risk from
+# every cold start. Pure-Python, torch-agnostic -> identical on g6e and g7e.
+diffusers==0.38.0
+
+# Version triangle, must stay in [4.51, 5.0) for BOTH torch stacks:
+#   - Qwen3ForCausalLM (FLUX.2's text encoder) needs transformers >= 4.51.
+#   - transformers 5.x references torch.float8_e8m0fnu, which exists only in
+#     torch >= 2.7; on the torch 2.5 (g6e) DLC that crashes at import. On the
+#     torch 2.7 (g7e) DLC 5.x would import, but 4.56.2 works there too, so it
+#     is the single version compatible with both stacks. Keep it pinned.
+transformers==4.56.2
+
+# Used by enable_model_cpu_offload() on g6e and imported by diffusers on both.
+# Lower bound for the offload API; upper cap so a future 2.x major can't silently
+# land on a cold start and change the offload hook behaviour.
+accelerate>=1.0.0,<2.0.0
+
+# Tokenizer + serialization deps. Cap the majors to keep cold starts
+# reproducible and avoid known ABI churn:
+#   - protobuf had a 4->5->6 sequence with breaking changes used during slow
+#     tokenizer conversion; pin to the 5.x line that transformers 4.56 expects.
+#   - safetensors is pre-1.0; cap < 1.0.
+#   - sentencepiece is stable; floor only.
+sentencepiece>=0.2.0
+protobuf>=4.25,<6
+safetensors>=0.4.3,<1.0

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <title>AI Photo Booth</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- Runtime config injected by the CDK BucketDeployment (task 14.1).
+         Sets window.__BOOTH_CONFIG__ before the app bundle loads. Absent in
+         local dev, where the VITE_* env fallback in src/config.ts is used. -->
+    <script src="/config.js"></script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,1429 @@
+/*
+ * Portrait-mode touch theme (Requirement 25).
+ *
+ * This is the single global stylesheet for the kiosk SPA. It establishes:
+ *   - Design tokens as CSS custom properties (mirrors `theme/tokens.ts`).
+ *   - A portrait content frame where height exceeds width (Req 25.1).
+ *   - Base touch-control styles enforcing >=44x44 CSS px targets (Req 25.2).
+ *   - Per-step layout utilities that center a single primary action (Req 25.3).
+ *   - Touch-first interaction: no hover-only affordances, visible :active and
+ *     :focus-visible states so the booth works without a keyboard/mouse and
+ *     remains operable via switch/keyboard access (Req 25.4).
+ *
+ * The React layout primitives (KioskScreen, TouchButton, PrimaryButton) in
+ * this folder apply the class names defined here. Capture-flow (tasks 9.1-9.4)
+ * and admin (tasks 10.x) screens consume those primitives and these classes.
+ */
+
+:root {
+  /* ---- Touch target (Requirement 25.2) ---- */
+  --touch-target-min: 44px;
+
+  /* ---- Spacing scale ---- */
+  --space-xs: 0.5rem;
+  --space-sm: 0.75rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2rem;
+  --space-xxl: 3rem;
+
+  /* ---- Radius ---- */
+  --radius-sm: 0.5rem;
+  --radius-md: 0.875rem;
+  --radius-lg: 1.25rem;
+  --radius-pill: 999px;
+
+  /* ---- Type scale (tap-friendly, legible at arm's length) ---- */
+  --font-size-sm: 1rem;
+  --font-size-md: 1.125rem;
+  --font-size-lg: 1.375rem;
+  --font-size-xl: 1.875rem;
+  --font-size-display: 2.5rem;
+  --font-weight-regular: 400;
+  --font-weight-medium: 600;
+  --font-weight-bold: 700;
+
+  /* ---- Colour palette (single dark, high-contrast kiosk theme) ---- */
+  --color-backdrop: #0b0d12;
+  --color-background: #13161f;
+  --color-surface: #1d2230;
+  --color-text: #f5f7fa;
+  --color-muted: #aab2c5;
+  --color-primary: #4c8dff;
+  --color-primary-active: #2f6fe0;
+  --color-primary-text: #0b0d12;
+  --color-border: #39415a;
+  --color-danger: #ff6b6b;
+  --color-focus: #9ec2ff;
+  --color-connected: #3ddc84;
+  --color-disconnected: #ff6b6b;
+
+  /* ---- Portrait frame ---- */
+  --portrait-max-width: 30rem;
+
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: var(--font-size-md);
+  line-height: 1.4;
+  color: var(--color-text);
+
+  /* Touch ergonomics: disable text selection and the tap-highlight flash so
+     the surface feels like an appliance, not a web page (Requirement 25.4). */
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--color-backdrop);
+  /* Disable the iOS/long-press callout and accidental text selection on a
+     shared touch surface. Inputs re-enable selection below. */
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+/* The portrait frame: a column that always reads taller than it is wide
+   (Requirement 25.1). On a true portrait kiosk it fills the viewport; on a
+   wide dev screen the max-width letterboxes content so width never exceeds
+   height. */
+#root {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  /* Use dynamic viewport height where supported so mobile browser chrome does
+     not clip the bottom controls. */
+  min-height: 100dvh;
+  background: var(--color-backdrop);
+}
+
+/* ----------------------------------------------------------------------------
+ * Layout primitives
+ * ------------------------------------------------------------------------- */
+
+/* KioskScreen root: the portrait content frame for a single step. */
+.kiosk-screen {
+  width: 100%;
+  max-width: var(--portrait-max-width);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  /* Respect notches / rounded corners on kiosk hardware. */
+  padding: calc(var(--space-lg) + env(safe-area-inset-top)) var(--space-lg)
+    calc(var(--space-lg) + env(safe-area-inset-bottom));
+  background: var(--color-background);
+}
+
+/* Optional header region (title, connection indicator). */
+.kiosk-screen__header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+  min-height: var(--touch-target-min);
+}
+
+/* Body region: holds the step's content; grows to fill the frame. */
+.kiosk-screen__body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-lg);
+  text-align: center;
+  min-height: 0;
+}
+
+/* Footer region: the per-step action area. Per Requirement 25.3 each step
+   centers the small set of controls it actually needs. */
+.kiosk-screen__footer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-md);
+  margin-top: var(--space-lg);
+}
+
+/* A vertical stack utility for arranging controls/content with rhythm. */
+.kiosk-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  width: 100%;
+}
+
+/* A row utility (e.g. Reset + Continue) that keeps controls touch-sized and
+   wraps instead of shrinking below the touch minimum. */
+.kiosk-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  width: 100%;
+}
+
+.kiosk-row > * {
+  flex: 1 1 auto;
+}
+
+/* Headings / supporting copy. */
+.kiosk-title {
+  margin: 0;
+  font-size: var(--font-size-display);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: -0.01em;
+}
+
+.kiosk-subtitle {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  color: var(--color-muted);
+  font-weight: var(--font-weight-regular);
+}
+
+/* ----------------------------------------------------------------------------
+ * Touch controls (Requirement 25.2 / 25.4)
+ *
+ * Every interactive control gets at least a 44x44 target. Styling is keyed to
+ * :active and :focus-visible (not :hover) so there are no hover-only
+ * affordances and the booth is fully operable by touch.
+ * ------------------------------------------------------------------------- */
+
+.touch-target,
+button,
+.touch-button,
+[role="button"] {
+  min-width: var(--touch-target-min);
+  min-height: var(--touch-target-min);
+}
+
+.touch-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  border: 2px solid transparent;
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.1;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  /* Avoid the 300ms tap delay and accidental double-tap zoom on touch. */
+  touch-action: manipulation;
+  transition: background-color 120ms ease, border-color 120ms ease,
+    transform 60ms ease;
+}
+
+/* Primary action: one prominent control per step (Requirement 25.3). */
+.touch-button--primary {
+  background: var(--color-primary);
+  color: var(--color-primary-text);
+}
+
+.touch-button--primary:active {
+  background: var(--color-primary-active);
+}
+
+/* Secondary action: outline style for less prominent choices. */
+.touch-button--secondary {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+
+.touch-button--secondary:active {
+  background: var(--color-border);
+}
+
+/* Destructive action (e.g. stop endpoint in admin). */
+.touch-button--danger {
+  background: transparent;
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
+.touch-button--danger:active {
+  background: rgba(255, 107, 107, 0.16);
+}
+
+/* A large primary control that fills the footer width for the hero action. */
+.touch-button--block {
+  width: 100%;
+  padding: var(--space-lg);
+  font-size: var(--font-size-xl);
+}
+
+/* Touch press feedback (replaces hover, which is unreliable on touch). */
+.touch-button:active {
+  transform: scale(0.98);
+}
+
+.touch-button:disabled,
+.touch-button[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Keyboard / switch-access focus: a clear ring so the booth is still operable
+   with assistive input even though touch is the primary mode (Req 25.4).
+   `:focus-visible` keeps the ring from flashing on plain touch taps. */
+:focus-visible,
+.touch-button:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* ----------------------------------------------------------------------------
+ * Surfaces and common widgets used across steps
+ * ------------------------------------------------------------------------- */
+
+/* A raised card surface for grouped content (e.g. a captured-photo preview). */
+.kiosk-card {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  width: 100%;
+}
+
+/* Media (captured photo, transformed result) constrained to the portrait
+   frame and never overflowing it. */
+.kiosk-media {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 60vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  background: #000;
+}
+
+/* The two-state connection indicator (Requirement 13.1-13.3). No identity is
+   ever shown — only a coloured dot + label. */
+.connection-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+}
+
+.connection-indicator__dot {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-disconnected);
+}
+
+.connection-indicator--connected .connection-indicator__dot {
+  background: var(--color-connected);
+}
+
+/* The "AI-generated" notice on the result screen (Requirement 10.3). */
+.kiosk-notice {
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+}
+
+/* Error/validation messaging. */
+.kiosk-error {
+  color: var(--color-danger);
+  font-size: var(--font-size-md);
+}
+
+/* Re-enable text selection inside real text inputs (admin schedule editor). */
+input,
+textarea {
+  user-select: text;
+  -webkit-user-select: text;
+  font-family: inherit;
+  font-size: var(--font-size-md);
+  min-height: var(--touch-target-min);
+}
+
+/* ----------------------------------------------------------------------------
+ * Reduced motion: honour the OS preference and drop the press animations.
+ * ------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .touch-button {
+    transition: none;
+  }
+  .touch-button:active {
+    transform: none;
+  }
+}
+
+/* ----------------------------------------------------------------------------
+ * Text inputs — shared field styling (sign-in, schedule editor, email).
+ * ------------------------------------------------------------------------- */
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input[type="time"],
+input[type="date"] {
+  width: 100%;
+  padding: var(--space-md) var(--space-md);
+  background: var(--color-backdrop);
+  color: var(--color-text);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition: border-color 120ms ease;
+}
+
+input::placeholder {
+  color: var(--color-muted);
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus,
+input[type="email"]:focus,
+input[type="time"]:focus,
+input[type="date"]:focus {
+  border-color: var(--color-primary);
+}
+
+/* ----------------------------------------------------------------------------
+ * Sign-in screen
+ * ------------------------------------------------------------------------- */
+.sign-in {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  width: 100%;
+  max-width: 22rem;
+  margin: 0 auto;
+  padding: var(--space-xl);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  text-align: left;
+}
+
+.sign-in h1 {
+  margin: 0 0 var(--space-xs);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  text-align: center;
+}
+
+/* Stack the label text above its input. */
+.sign-in label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+  font-weight: var(--font-weight-medium);
+}
+
+.sign-in [data-testid="auth-error"] {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+}
+
+.sign-in .touch-button {
+  margin-top: var(--space-xs);
+}
+
+/* ----------------------------------------------------------------------------
+ * Start screen
+ * ------------------------------------------------------------------------- */
+.start-screen__hero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.start-screen__title {
+  margin: 0;
+  font-size: var(--font-size-display);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: -0.01em;
+}
+
+.start-screen__subtitle {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  color: var(--color-muted);
+}
+
+/* ----------------------------------------------------------------------------
+ * Camera view
+ * ------------------------------------------------------------------------- */
+.camera-view__video {
+  width: 100%;
+  max-height: 60vh;
+  border-radius: var(--radius-md);
+  background: #000;
+  object-fit: cover;
+  transform: scaleX(-1); /* mirror like a selfie cam */
+}
+
+.camera-view__status,
+.camera-view__error {
+  font-size: var(--font-size-md);
+  color: var(--color-muted);
+}
+
+.camera-view__error {
+  color: var(--color-danger);
+}
+
+.camera-view__actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+/* ----------------------------------------------------------------------------
+ * Review screen
+ * ------------------------------------------------------------------------- */
+.review-screen__photo {
+  width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  background: #000;
+}
+
+.review-screen__actions {
+  display: flex;
+  flex-direction: row;
+  gap: var(--space-md);
+}
+
+.review-screen__actions > * {
+  flex: 1 1 0;
+}
+
+/* ----------------------------------------------------------------------------
+ * Effect selector
+ * ------------------------------------------------------------------------- */
+.effect-selector__photo {
+  width: 100%;
+  max-height: 26vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  background: #000;
+}
+
+.effect-selector__group {
+  width: 100%;
+  margin-bottom: var(--space-md);
+}
+
+.effect-selector__group-title {
+  margin: 0 0 var(--space-sm);
+  font-size: var(--font-size-md);
+  color: var(--color-muted);
+  text-align: left;
+}
+
+.effect-selector__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-sm);
+}
+
+.effect-selector__grid .touch-button {
+  font-size: var(--font-size-md);
+  padding: var(--space-md);
+}
+
+/* ----------------------------------------------------------------------------
+ * Loading screen
+ * ------------------------------------------------------------------------- */
+.loading-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-lg);
+}
+
+.loading-screen__spinner {
+  width: 3.5rem;
+  height: 3.5rem;
+  border: 4px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: var(--radius-pill);
+  animation: booth-spin 0.9s linear infinite;
+}
+
+.loading-screen__text {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  color: var(--color-text);
+  min-height: 2.5em;
+}
+
+@keyframes booth-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-screen__spinner {
+    animation-duration: 2.4s;
+  }
+}
+
+/* ----------------------------------------------------------------------------
+ * Result screen
+ * ------------------------------------------------------------------------- */
+.result-screen__image {
+  width: 100%;
+  max-height: 55vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  background: #000;
+}
+
+.result-screen__notice {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+}
+
+.result-screen__email {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  width: 100%;
+}
+
+.result-screen__email-label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+  text-align: left;
+}
+
+.result-screen__email [data-testid="email-error"] {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+}
+
+.result-screen__email-sent {
+  margin: 0;
+  color: var(--color-connected);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+}
+
+/* ----------------------------------------------------------------------------
+ * App shell (top bar + tabs)
+ * ------------------------------------------------------------------------- */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: var(--portrait-max-width);
+  flex: 1;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--color-background);
+}
+
+.app-shell__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: calc(var(--space-md) + env(safe-area-inset-top)) var(--space-lg)
+    var(--space-md);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.app-shell__tabs {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: center;
+}
+
+.app-shell__tabs .touch-button {
+  font-size: var(--font-size-sm);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.app-shell__content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ----------------------------------------------------------------------------
+ * Admin tab
+ * ------------------------------------------------------------------------- */
+.admin-tab {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.admin-tab__nav {
+  display: flex;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg) 0;
+}
+
+.endpoint-panel__list,
+.schedule-calendar__grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  width: 100%;
+}
+
+.endpoint-panel__detail,
+.schedule-calendar__editor {
+  width: 100%;
+  margin-top: var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  text-align: left;
+}
+
+.endpoint-panel__actions,
+.schedule-calendar__editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.schedule-calendar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  width: 100%;
+  margin-bottom: var(--space-sm);
+}
+
+.schedule-calendar__month {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-medium);
+}
+
+.schedule-calendar__weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: var(--space-xs);
+  width: 100%;
+  margin-bottom: var(--space-xs);
+}
+
+.schedule-calendar__weekday {
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+  font-weight: var(--font-weight-medium);
+}
+
+.schedule-calendar__grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: var(--space-xs);
+  width: 100%;
+}
+
+/* Empty leading cells before the 1st of the month. */
+.schedule-calendar__pad {
+  min-height: var(--touch-target-min);
+}
+
+.schedule-calendar__grid .touch-button {
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--space-xs) 2px;
+  min-height: 3.25rem;
+  font-size: var(--font-size-sm);
+  line-height: 1.05;
+  overflow: hidden;
+}
+
+.schedule-calendar__daynum {
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-md);
+}
+
+/* A day that has a Working_Hours record is filled green (no time text — it
+   never fits the cell). The number stays legible on the green fill. */
+.schedule-calendar__day--defined {
+  background: var(--color-connected);
+  border-color: var(--color-connected);
+  color: var(--color-primary-text);
+}
+
+.schedule-calendar__day--defined:active {
+  background: var(--color-connected);
+}
+
+/* "Today" gets a subtle accent ring distinct from the selection. */
+.schedule-calendar__day--today {
+  box-shadow: inset 0 0 0 2px var(--color-connected);
+}
+
+.schedule-calendar__editor label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+}
+
+/* ----------------------------------------------------------------------------
+ * Users panel (admin)
+ * ------------------------------------------------------------------------- */
+.users-panel__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+  margin-bottom: var(--space-sm);
+}
+
+.users-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  width: 100%;
+}
+
+.users-panel__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.users-panel__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  min-width: 0;
+}
+
+.users-panel__name {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.users-panel__status {
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+}
+
+.users-panel__confirm {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+/* ----------------------------------------------------------------------------
+ * Studio view (combined effects + result), responsive monitor/mobile layouts
+ * ------------------------------------------------------------------------- */
+
+/* Shared option group styling (used in both layouts). */
+.studio__option-group {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.studio__option-title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  color: var(--color-muted);
+  text-align: left;
+}
+
+.studio__option-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.studio__option-list .touch-button {
+  width: 100%;
+  font-size: var(--font-size-md);
+  padding: var(--space-md);
+}
+
+/* Option buttons that carry a thumbnail: image on the left, label beside it,
+   laid out on one row. The TouchButton centers its content by default, so we
+   switch to a left-aligned row and let the label take the remaining width. */
+.studio__option-list .touch-button.studio__option--with-image {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-md);
+  text-align: left;
+  padding: var(--space-sm) var(--space-md);
+}
+
+.studio__option-thumb {
+  flex: 0 0 auto;
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: #000;
+}
+
+.studio__option-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Phone: keep the thumbnail small and let a long label wrap so image + text
+   always fit within the button on narrow screens. */
+.studio--mobile .studio__option-thumb {
+  width: 40px;
+  height: 40px;
+}
+
+.studio--mobile .studio__option-list .touch-button.studio__option--with-image {
+  font-size: var(--font-size-sm);
+}
+
+.studio__image {
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  background: #000;
+}
+
+.studio__image-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+  margin: 0 0 var(--space-xs);
+  text-align: center;
+}
+
+.studio__meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  width: 100%;
+  align-items: stretch;
+}
+
+.studio__actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  width: 100%;
+}
+
+.studio__generating {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+}
+
+.studio__generating-text {
+  margin: 0;
+  font-size: var(--font-size-md);
+  color: var(--color-text);
+  text-align: center;
+  min-height: 2.5em;
+}
+
+/* ---- Monitor layout: three columns (left options | center | right options) ---- */
+.studio--monitor {
+  width: 100%;
+  max-width: 1600px;
+  margin: 0 auto;
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(420px, 2fr) minmax(220px, 1fr);
+  gap: var(--space-xl);
+  align-items: start;
+  padding: calc(var(--space-xl) + env(safe-area-inset-top)) var(--space-xl)
+    calc(var(--space-xl) + env(safe-area-inset-bottom));
+  background: var(--color-background);
+  overflow-y: auto;
+}
+
+.studio__side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  position: sticky;
+  top: var(--space-lg);
+}
+
+.studio__center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-lg);
+  min-width: 0;
+}
+
+.studio__image-block {
+  margin: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.studio__image-block .studio__image {
+  max-height: 38vh;
+}
+
+.studio__result-frame {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.studio__result-placeholder {
+  width: 100%;
+  min-height: 24vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-muted);
+  text-align: center;
+  padding: var(--space-lg);
+}
+
+/* ---- Mobile layout: image (carousel) on top, options stacked below ---- */
+.studio--mobile {
+  width: 100%;
+  max-width: var(--portrait-max-width);
+  margin: 0 auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  padding: calc(var(--space-lg) + env(safe-area-inset-top)) var(--space-lg)
+    calc(var(--space-lg) + env(safe-area-inset-bottom));
+  background: var(--color-background);
+  overflow-y: auto;
+}
+
+.studio__image-area {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.studio--mobile .studio__options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+/* ---- Image carousel (mobile) ---- */
+.image-carousel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  width: 100%;
+}
+
+.image-carousel__frame {
+  position: relative;
+  width: 100%;
+}
+
+.image-carousel__image {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 52vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  background: #000;
+}
+
+.image-carousel__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(11, 13, 18, 0.72);
+  border-radius: var(--radius-md);
+}
+
+.image-carousel__controls {
+  display: flex;
+  gap: var(--space-sm);
+  justify-content: center;
+}
+
+.image-carousel__tab {
+  flex: 1 1 0;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-surface);
+  color: var(--color-muted);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.image-carousel__tab.is-active {
+  background: var(--color-primary);
+  color: var(--color-primary-text);
+  border-color: var(--color-primary);
+}
+
+/* On monitor-class viewports, let the shell expand past the portrait cap so the
+   three-column studio has room. The studio itself caps + centers its content;
+   the portrait KioskScreen steps (Start/Camera/Review) are centered here. */
+@media (min-width: 820px) {
+  .app-shell {
+    max-width: none;
+  }
+  .app-shell__bar {
+    max-width: var(--portrait-max-width);
+    width: 100%;
+    margin: 0 auto;
+  }
+  /* Center the active step horizontally within the now-full-width shell. */
+  .app-shell__content {
+    align-items: center;
+  }
+}
+
+/* ----------------------------------------------------------------------------
+ * Cost panel (admin schedule tab): month-to-date summary + per-day breakdown
+ * ------------------------------------------------------------------------- */
+.cost-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  margin-bottom: var(--space-md);
+  padding: var(--space-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  text-align: left;
+}
+
+.cost-summary__label {
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+}
+
+.cost-summary__amount {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+}
+
+.cost-summary__note {
+  font-size: var(--font-size-sm);
+  color: var(--color-danger);
+}
+
+.cost-summary__hint {
+  font-size: 0.75rem;
+  color: var(--color-muted);
+}
+
+.cost-breakdown {
+  width: 100%;
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--color-border);
+  text-align: left;
+}
+
+.cost-breakdown__title {
+  margin: 0 0 var(--space-sm);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+}
+
+.cost-breakdown__status {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+}
+
+.cost-breakdown__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.cost-breakdown__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-md);
+  font-size: var(--font-size-sm);
+}
+
+.cost-breakdown__service {
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cost-breakdown__amount {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cost-breakdown__row--total {
+  margin-top: var(--space-xs);
+  padding-top: var(--space-xs);
+  border-top: 1px solid var(--color-border);
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-md);
+}
+
+.cost-breakdown__hint {
+  margin: var(--space-sm) 0 0;
+  font-size: 0.75rem;
+  color: var(--color-muted);
+}
+
+/* ----------------------------------------------------------------------------
+ * On-screen email keyboard (kiosk monitor, no physical keyboard)
+ * ------------------------------------------------------------------------- */
+.email-keyboard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  width: 100%;
+  padding: var(--space-sm);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.email-keyboard__row {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+}
+
+.email-keyboard__key {
+  flex: 1 1 auto;
+  min-width: 2.5rem;
+  min-height: var(--touch-target-min);
+  padding: var(--space-sm);
+  background: var(--color-background);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background-color 80ms ease, transform 60ms ease;
+}
+
+.email-keyboard__key:active {
+  background: var(--color-border);
+  transform: scale(0.96);
+}
+
+.email-keyboard__key--symbol {
+  color: var(--color-primary);
+  font-weight: var(--font-weight-bold);
+}
+
+.email-keyboard__key--wide {
+  flex: 0 0 auto;
+  min-width: 3.5rem;
+}
+
+.email-keyboard__row--shortcuts .email-keyboard__key--shortcut {
+  flex: 1 1 auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+}
+
+.email-keyboard__row--actions {
+  margin-top: var(--space-xs);
+  gap: var(--space-sm);
+}
+
+.email-keyboard__row--actions .touch-button {
+  flex: 1 1 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .email-keyboard__key {
+    transition: none;
+  }
+  .email-keyboard__key:active {
+    transform: none;
+  }
+}
+
+/* ----------------------------------------------------------------------------
+ * Endpoint panel: add-config picker + managed config rows
+ * ------------------------------------------------------------------------- */
+.endpoint-add {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  width: 100%;
+  margin-bottom: var(--space-md);
+  text-align: left;
+}
+
+.endpoint-add__label {
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+  font-weight: var(--font-weight-medium);
+}
+
+.endpoint-add__row {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: stretch;
+  width: 100%;
+}
+
+.endpoint-add__input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.endpoint-add__row .touch-button {
+  flex: 0 0 auto;
+  width: auto;
+  white-space: nowrap;
+}
+
+.endpoint-config {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.endpoint-config--current {
+  border-color: var(--color-primary);
+  box-shadow: inset 0 0 0 1px var(--color-primary);
+}
+
+.endpoint-config__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.endpoint-config__name {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.endpoint-config__badge {
+  flex: 0 0 auto;
+  padding: 2px var(--space-sm);
+  background: var(--color-primary);
+  color: var(--color-primary-text);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+}
+
+.endpoint-config__status {
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+}
+
+.endpoint-config__actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  width: 100%;
+}
+
+/* "Make current" is the key toggle — give it its own full-width row. */
+.endpoint-config__make-current {
+  width: 100%;
+}
+
+/* Refresh / Start / Remove share a row, each sized to its label; they wrap to
+   a new line on very narrow screens instead of squeezing the text. */
+.endpoint-config__action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  width: 100%;
+}
+
+.endpoint-config__action-row .touch-button {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 6rem;
+  font-size: var(--font-size-sm);
+  padding: var(--space-sm) var(--space-md);
+  white-space: nowrap;
+}

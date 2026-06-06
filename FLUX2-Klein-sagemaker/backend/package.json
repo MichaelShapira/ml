@@ -1,0 +1,28 @@
+{
+  "name": "ai-photo-booth-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI Photo Booth backend Lambda source (TypeScript, Node 20)",
+  "type": "module",
+  "engines": {
+    "node": ">=20 <21"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "3.687.0",
+    "@aws-sdk/client-s3": "3.687.0",
+    "@aws-sdk/client-sagemaker": "3.687.0",
+    "@aws-sdk/client-sagemaker-runtime": "3.687.0"
+  },
+  "devDependencies": {
+    "@types/node": "20.17.6",
+    "aws-sdk-client-mock": "4.1.0",
+    "fast-check": "3.23.1",
+    "typescript": "5.6.3",
+    "vitest": "2.1.5"
+  }
+}

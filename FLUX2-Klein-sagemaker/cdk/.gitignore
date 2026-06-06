@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.d.ts
+*.js
+!vitest.config.ts
+cdk.out/
+.cdk.staging/
+*.log
