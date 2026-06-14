@@ -13,7 +13,7 @@
  * All AWS access is via `api/endpoints.ts` under the Admin_Role; IAM is the
  * real boundary.
  */
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { KioskScreen, TouchButton, PrimaryButton } from "../theme";
 import {
   listAllConfigNames,
@@ -72,6 +72,58 @@ export function EndpointPanel() {
     void refresh();
     void refreshAll();
   }, [refresh, refreshAll]);
+
+  /**
+   * Silent background poll: every 10 s, re-fetch the live status of each managed
+   * config and patch it into the list IN PLACE — no loading spinner, no status
+   * reset, no message changes. Re-arms whenever the set of managed configs
+   * changes; cleared on unmount (leaving the panel). A re-entrancy guard skips a
+   * tick if the previous one is still in flight.
+   */
+  const loadedNamesKey =
+    load.kind === "loaded"
+      ? load.configs.map((c) => c.name).sort().join("|")
+      : "";
+  const silentPollingRef = useRef(false);
+  useEffect(() => {
+    if (!loadedNamesKey) {
+      return;
+    }
+    const names = loadedNamesKey.split("|");
+    const tick = async () => {
+      if (silentPollingRef.current) {
+        return;
+      }
+      silentPollingRef.current = true;
+      try {
+        const updates = await Promise.all(
+          names.map(async (name) => {
+            try {
+              return { name, status: await describeEndpointStatus(name) };
+            } catch {
+              // Leave this row's status unchanged on a transient failure.
+              return null;
+            }
+          }),
+        );
+        setLoad((prev) =>
+          prev.kind === "loaded"
+            ? {
+                kind: "loaded",
+                configs: prev.configs.map((c) => {
+                  const u = updates.find((x) => x && x.name === c.name);
+                  return u ? { ...c, status: u.status } : c;
+                }),
+              }
+            : prev,
+        );
+      } finally {
+        silentPollingRef.current = false;
+      }
+    };
+    const intervalId = setInterval(() => void tick(), 10_000);
+    return () => clearInterval(intervalId);
+  }, [loadedNamesKey]);
 
   const refreshOne = useCallback(async (name: string) => {
     try {

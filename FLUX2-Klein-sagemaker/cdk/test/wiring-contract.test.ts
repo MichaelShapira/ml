@@ -63,7 +63,9 @@ describe("SPA → AWS wiring contract", () => {
 
   it("exposes the Invoke_Proxy via an IAM-authenticated Function URL (never public)", () => {
     // The SageMaker runtime API has no CORS; the browser signs requests to this
-    // Function URL instead. It MUST require IAM auth so it is not public.
+    // Function URL instead. It MUST require IAM auth so it is not public. There
+    // are NO public (NONE) Function URLs anywhere — the share/download path uses
+    // a client-side presigned S3 URL, not a Lambda Function URL.
     const urls = template.findResources("AWS::Lambda::Url");
     const authTypes = Object.values(urls).map(
       (u) => (u.Properties as { AuthType?: string }).AuthType,
@@ -72,7 +74,6 @@ describe("SPA → AWS wiring contract", () => {
     for (const authType of authTypes) {
       expect(authType).toBe("AWS_IAM");
     }
-    // No public (NONE) Function URLs anywhere.
     expect(authTypes).not.toContain("NONE");
   });
 
@@ -97,8 +98,13 @@ describe("SPA → AWS wiring contract", () => {
     expect(allowed).toContain("dynamodb:DeleteItem");
   });
 
-  it("permits the SES SendEmail action the browser Email_Service issues", () => {
-    expect(allowed).toContain("ses:SendEmail");
+  it("permits the share upload + signer invoke the browser Share_Service issues", () => {
+    // "Share with me": the browser PutObjects the image to the private share
+    // bucket, then invokes the AWS_IAM Share_Signer Function URL to mint a
+    // CloudFront signed URL. No GetObject on the share bucket from the browser.
+    expect(allowed).toContain("s3:PutObject");
+    expect(allowed).toContain("lambda:InvokeFunctionUrl");
+    expect(allowed).toContain("lambda:InvokeFunction");
   });
 
   it("permits the Cost Explorer read the admin cost panel issues", () => {

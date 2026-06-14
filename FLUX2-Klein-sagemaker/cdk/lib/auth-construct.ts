@@ -54,18 +54,6 @@ export interface AuthConstructProps {
    */
   readonly endpointName?: string;
 
-  /**
-   * ARN of the verified SES sender identity. When supplied, both the
-   * Authenticated_Role and the Admin_Role are granted `ses:SendEmail` /
-   * `ses:SendRawEmail`, scoped to this identity and to a `ses:FromAddress`
-   * matching {@link senderEmail}, so any signed-in visitor can email their
-   * photo from the booth's verified sender.
-   */
-  readonly senderIdentityArn?: string;
-
-  /** The verified From address; used in the `ses:FromAddress` condition. */
-  readonly senderEmail?: string;
-
   /** Optional explicit name for the Cognito user pool. */
   readonly userPoolName?: string;
 }
@@ -200,15 +188,6 @@ export class AuthConstruct extends Construct {
     for (const statement of this.captureFlowStatements(props.ioBucket, endpointArn)) {
       this.authenticatedRole.addToPolicy(statement);
     }
-    // Both roles can email the visitor's photo via the verified SES sender.
-    const sesStatement = this.sesSendStatement(
-      props.senderIdentityArn,
-      props.senderEmail,
-    );
-
-    if (sesStatement) {
-      this.authenticatedRole.addToPolicy(sesStatement);
-    }
 
     // Admin_Role: everything the Authenticated_Role can do PLUS endpoint
     // management and schedule writes.
@@ -219,12 +198,6 @@ export class AuthConstruct extends Construct {
     });
     for (const statement of this.captureFlowStatements(props.ioBucket, endpointArn)) {
       this.adminRole.addToPolicy(statement);
-    }
-    if (sesStatement) {
-      this.adminRole.addToPolicy(this.sesSendStatement(
-        props.senderIdentityArn,
-        props.senderEmail,
-      ) as iam.PolicyStatement);
     }
     for (const statement of this.adminStatements(
       anyEndpointArn,
@@ -289,55 +262,6 @@ export class AuthConstruct extends Construct {
       },
       "sts:AssumeRoleWithWebIdentity",
     );
-  }
-
-  /**
-   * `ses:SendEmail` statement scoped to the verified sender identity and a
-   * `ses:FromAddress` matching the sender, so a signed-in visitor can email
-   * their photo only from the booth's verified From address. Returns
-   * `undefined` when no sender identity is configured (email disabled).
-   */
-  private sesSendStatement(
-    senderIdentityArn?: string,
-    senderEmail?: string,
-  ): iam.PolicyStatement | undefined {
-    if (!senderIdentityArn) {
-      return undefined;
-    }
-    // SES v2 SendEmail (raw MIME) authorizes the action against ALL resources
-    // involved in the message — the SENDER identity, the RECIPIENT identity,
-    // AND any default configuration set attached to the sender identity (e.g.
-    // "configuration-set/<name>"). Scoping `resources` to only the sender
-    // identity therefore yields a 403 on whichever other resource is evaluated.
-    // The correct least-privilege shape is to allow the send action on any
-    // identity AND any configuration set in this account/region, while locking
-    // the SENDER down with a `ses:FromAddress` condition so a visitor can only
-    // ever send FROM the booth's verified address (to any recipient).
-    const stack = cdk.Stack.of(this);
-    const sendOnAnyIdentity = stack.formatArn({
-      service: "ses",
-      resource: "identity",
-      resourceName: "*",
-    });
-    const anyConfigurationSet = stack.formatArn({
-      service: "ses",
-      resource: "configuration-set",
-      resourceName: "*",
-    });
-    return new iam.PolicyStatement({
-      sid: "SendPhotoEmail",
-      effect: iam.Effect.ALLOW,
-      // SendRawEmail covers the SES v2 raw-MIME SendEmail used to attach the PNG.
-      actions: ["ses:SendEmail", "ses:SendRawEmail"],
-      resources: [sendOnAnyIdentity, anyConfigurationSet],
-      ...(senderEmail
-        ? {
-            conditions: {
-              StringEquals: { "ses:FromAddress": senderEmail },
-            },
-          }
-        : {}),
-    });
   }
 
   /**

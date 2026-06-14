@@ -1,34 +1,54 @@
 /**
  * StudioView — the combined capture studio (Effects + Loading + Result + Error).
  *
- * Replaces the separate EffectSelector / LoadingScreen / ResultScreen as three
- * full-screen steps with ONE view where the original photo, the effect options,
- * and the generated result are co-present. The capture-flow machine is still
- * the source of truth; this component just renders whichever phase the machine
- * is in, keeping the options visible so the visitor can pick another effect and
- * regenerate in place.
+ * Renders the original photo, the effect options, and any generated results
+ * co-present. The capture-flow machine is the source of truth; this component
+ * renders whichever phase the machine is in and keeps the options visible so
+ * the visitor can pick another effect and regenerate in place.
  *
- * Two responsive layouts (see {@link useLayoutMode}):
- *   - "monitor": background options stacked on the LEFT, character options on
- *     the RIGHT, original photo centered, generated image directly BELOW it.
- *   - "mobile": image area on top with an original/generated carousel; the two
- *     option groups stacked BELOW it. A new generation replaces the previous.
+ * A session can hold up to three generated images at once — a background result,
+ * a character (dress) result, and a merged image combining the two:
+ *   - "monitor": background options on the LEFT, character options on the RIGHT,
+ *     original photo centered, and each generated image stacked directly BELOW
+ *     it (background, then character, then merged).
+ *   - "mobile": the image area is a carousel with one node per image (Original,
+ *     Background, Character, Merged); the two option groups stack BELOW it.
+ *
+ * Once BOTH a background and a character image exist, a "Merge" button appears
+ * that combines them into a single image.
+ *
+ * Sharing: each generated image has a "Share with me" button. Tapping it uploads
+ * that image to the short-lived Share_Bucket, presigns a 15-minute download URL,
+ * and shows it as a QR code (see {@link ShareQrModal}). There is no email.
  */
-import { useCallback, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import {
   BACKGROUND_EFFECTS,
   PERSON_EFFECTS,
   effectImageUrl,
   type EffectOption,
 } from "./effects";
-import { ImageCarousel } from "./ImageCarousel";
-import { EmailKeyboard } from "./EmailKeyboard";
+import { ImageCarousel, type CarouselSlide } from "./ImageCarousel";
+import { ShareQrModal, type ShareState } from "./ShareQrModal";
 import { TouchButton, PrimaryButton } from "../theme";
-import { sendPhotoEmail, isValidEmail, InvalidEmailError, EmailDeliveryError } from "../api/email";
+import { shareImage } from "../api/share";
 import type { LayoutMode } from "./useLayoutMode";
 
 /** The generation phase the studio is showing. */
 export type StudioPhase = "idle" | "loading" | "result" | "error";
+
+/** The generated images available this session, keyed by slot. */
+export interface StudioResults {
+  /** Background-effect result (object URL), if generated. */
+  background?: string | null;
+  /** Character/dress-effect result (object URL), if generated. */
+  person?: string | null;
+  /** Merged image (object URL), if produced. */
+  merged?: string | null;
+}
+
+/** The slot column option group binds each column to the slot it fills. */
+type Slot = "background" | "person";
 
 export interface StudioViewProps {
   /** Layout to render (monitor vs mobile). */
@@ -37,31 +57,42 @@ export interface StudioViewProps {
   photo: string;
   /** Current generation phase derived from the machine state. */
   phase: StudioPhase;
-  /** The generated image URL when phase is "result", else null. */
-  generatedUrl?: string | null;
+  /** Generated images by slot. */
+  results?: StudioResults;
   /** Rotating loading message shown while phase is "loading". */
   loadingMessage?: string;
   /** Error copy shown when phase is "error". */
   errorMessage?: string;
   /** Pick an effect (starts/restarts generation). Ignored while loading. */
-  onSelect: (effectId: string) => void;
+  onSelect: (effectId: string, slot: Slot) => void;
+  /** Merge the background + character images into one. Shown only when allowed. */
+  onMerge: () => void;
   /** Start a fresh session (discard everything, back to Start). */
   onNewSession: () => void;
 }
 
-/** A vertical list of effect option buttons for one category. */
+/** Human-readable caption for each result slot. */
+const SLOT_LABEL: Record<"background" | "person" | "merged", string> = {
+  background: "Background",
+  person: "Character",
+  merged: "Merged",
+};
+
+/** A vertical list of effect option buttons for one category/slot. */
 function OptionColumn({
   title,
   options,
+  slot,
   locked,
   layout,
   onSelect,
 }: {
   title: string;
   options: readonly EffectOption[];
+  slot: Slot;
   locked: boolean;
   layout: LayoutMode;
-  onSelect: (effectId: string) => void;
+  onSelect: (effectId: string, slot: Slot) => void;
 }) {
   return (
     <div className="studio__option-group">
@@ -77,7 +108,7 @@ function OptionColumn({
               disabled={locked}
               testId={`effect-${option.id}`}
               className={imageUrl ? "studio__option--with-image" : undefined}
-              onClick={() => onSelect(option.id)}
+              onClick={() => onSelect(option.id, slot)}
             >
               {imageUrl && (
                 <img
@@ -111,145 +142,62 @@ function GeneratingOverlay({ message }: { message?: string }) {
   );
 }
 
-/** Characters allowed anywhere in an email address (used to sanitize input). */
-const EMAIL_CHAR_RE = /[^a-zA-Z0-9@._+\-]/g;
-
-/** Strip any character that cannot appear in an email address. */
-function sanitizeEmail(value: string): string {
-  return value.replace(EMAIL_CHAR_RE, "").toLowerCase();
-}
-
-/** The email-my-photo form (shown once a result exists). */
-function EmailForm({ imageUrl, layout }: { imageUrl: string; layout: LayoutMode }) {
-  const [email, setEmail] = useState("");
-  const [keyboardOpen, setKeyboardOpen] = useState(false);
-  const [state, setState] = useState<
-    | { kind: "idle" }
-    | { kind: "sending" }
-    | { kind: "sent" }
-    | { kind: "error"; message: string }
-  >({ kind: "idle" });
-
-  // On the kiosk monitor there is no physical/native keyboard, so we render our
-  // own on-screen email keyboard. On mobile the native OS keyboard is used.
-  const useOnScreenKeyboard = layout === "monitor";
-
-  const clearError = useCallback(() => {
-    setState((s) => (s.kind === "error" ? { kind: "idle" } : s));
-  }, []);
-
-  const submit = useCallback(async () => {
-    if (!isValidEmail(email)) {
-      setState({ kind: "error", message: "Please enter a valid email address." });
-      return;
-    }
-    setState({ kind: "sending" });
-    try {
-      await sendPhotoEmail({ to: email, imageSrc: imageUrl });
-      setState({ kind: "sent" });
-    } catch (err) {
-      const message =
-        err instanceof InvalidEmailError || err instanceof EmailDeliveryError
-          ? err.message
-          : "Couldn't send the email. Please check the address and try again.";
-      setState({ kind: "error", message });
-    }
-  }, [email, imageUrl]);
-
-  const onSubmit = useCallback(
-    (e: FormEvent) => {
-      e.preventDefault();
-      void submit();
-    },
-    [submit],
-  );
-
-  if (state.kind === "sent") {
-    return (
-      <div className="result-screen__email">
-        <p className="result-screen__email-sent" data-testid="email-sent" role="status">
-          Sent! Check your inbox.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <form className="result-screen__email" onSubmit={onSubmit}>
-      <label className="result-screen__email-label">
-        Email me my photo
-        <input
-          type="text"
-          inputMode="email"
-          autoComplete="email"
-          // On the monitor kiosk, suppress any native keyboard and drive entry
-          // from our on-screen keyboard instead.
-          readOnly={useOnScreenKeyboard}
-          placeholder="you@example.com"
-          value={email}
-          data-testid="email-input"
-          onFocus={() => {
-            if (useOnScreenKeyboard) setKeyboardOpen(true);
-          }}
-          onClick={() => {
-            if (useOnScreenKeyboard) setKeyboardOpen(true);
-          }}
-          onChange={(ev) => {
-            // Regex-sanitize so only valid email characters can ever be entered
-            // (covers the native/mobile keyboard path).
-            setEmail(sanitizeEmail(ev.target.value));
-            clearError();
-          }}
-        />
-      </label>
-
-      {useOnScreenKeyboard && keyboardOpen && (
-        <EmailKeyboard
-          onInput={(ch) => {
-            setEmail((cur) => sanitizeEmail(cur + ch));
-            clearError();
-          }}
-          onBackspace={() => {
-            setEmail((cur) => cur.slice(0, -1));
-            clearError();
-          }}
-          onClear={() => {
-            setEmail("");
-            clearError();
-          }}
-          onDone={() => setKeyboardOpen(false)}
-        />
-      )}
-
-      {state.kind === "error" && (
-        <p role="alert" data-testid="email-error">
-          {state.message}
-        </p>
-      )}
-      <TouchButton
-        type="submit"
-        variant="secondary"
-        testId="send-email-button"
-        disabled={state.kind === "sending"}
-      >
-        {state.kind === "sending" ? "Sending…" : "Send Email"}
-      </TouchButton>
-    </form>
-  );
-}
-
 export function StudioView({
   layout,
   photo,
   phase,
-  generatedUrl,
+  results,
   loadingMessage,
   errorMessage,
   onSelect,
+  onMerge,
   onNewSession,
 }: StudioViewProps) {
   const locked = phase === "loading";
-  const hasResult = phase === "result" && Boolean(generatedUrl);
+
+  // "Share with me" state for the QR overlay.
+  const [share, setShare] = useState<ShareState>({ status: "idle" });
+
+  const handleShare = useCallback(async (imageUrl: string) => {
+    setShare({ status: "loading" });
+    try {
+      const result = await shareImage(imageUrl);
+      setShare({
+        status: "ready",
+        url: result.url,
+        expiresInSeconds: result.expiresInSeconds,
+      });
+    } catch {
+      setShare({
+        status: "error",
+        message: "Couldn't prepare the download. Please try again.",
+      });
+    }
+  }, []);
+
+  const closeShare = useCallback(() => setShare({ status: "idle" }), []);
+
+  /** A "Share with me" button for a specific generated image. */
+  const shareButton = (url: string, slot: "background" | "person" | "merged") => (
+    <TouchButton
+      variant="secondary"
+      testId={`share-button-${slot}`}
+      disabled={share.status === "loading"}
+      onClick={() => void handleShare(url)}
+    >
+      Share with me
+    </TouchButton>
+  );
+
+  // Generated images present this session, in display order.
+  const present: { slot: "background" | "person" | "merged"; url: string }[] = [];
+  if (results?.background) present.push({ slot: "background", url: results.background });
+  if (results?.person) present.push({ slot: "person", url: results.person });
+  if (results?.merged) present.push({ slot: "merged", url: results.merged });
+
+  const hasAnyResult = present.length > 0;
+  // Merge is offered only once BOTH source images exist.
+  const mergeAvailable = Boolean(results?.background) && Boolean(results?.person);
 
   const overlay =
     phase === "loading" ? <GeneratingOverlay message={loadingMessage} /> : null;
@@ -258,6 +206,7 @@ export function StudioView({
     <OptionColumn
       title="Backgrounds"
       options={BACKGROUND_EFFECTS}
+      slot="background"
       locked={locked}
       layout={layout}
       onSelect={onSelect}
@@ -267,6 +216,7 @@ export function StudioView({
     <OptionColumn
       title="Characters"
       options={PERSON_EFFECTS}
+      slot="person"
       locked={locked}
       layout={layout}
       onSelect={onSelect}
@@ -276,7 +226,7 @@ export function StudioView({
   // The result/error meta shown under the image area.
   const resultMeta: ReactNode = (
     <>
-      {hasResult && (
+      {hasAnyResult && (
         <p className="result-screen__notice" data-testid="ai-generated-notice">
           This image is AI-generated.
         </p>
@@ -286,12 +236,32 @@ export function StudioView({
           {errorMessage ?? "Something went wrong. Pick an effect to try again."}
         </p>
       )}
-      {hasResult && <EmailForm imageUrl={generatedUrl as string} layout={layout} />}
     </>
   );
 
+  // Shared action controls: Merge (when available) + New Session.
+  const actions: ReactNode = (
+    <div className="studio__actions">
+      {mergeAvailable && (
+        <TouchButton
+          variant="primary"
+          testId="merge-button"
+          disabled={locked}
+          onClick={onMerge}
+        >
+          {results?.merged ? "Merge again" : "Merge background + character"}
+        </TouchButton>
+      )}
+      <PrimaryButton testId="new-session-button" onClick={onNewSession}>
+        New Session
+      </PrimaryButton>
+    </div>
+  );
+
+  const shareModal = <ShareQrModal state={share} layout={layout} onClose={closeShare} />;
+
   if (layout === "monitor") {
-    // Monitor: [left options] [ center: original over generated ] [right options]
+    // Monitor: [left options] [ center: original then each result stacked ] [right options]
     return (
       <section
         className="studio studio--monitor"
@@ -312,39 +282,58 @@ export function StudioView({
             />
           </figure>
 
-          <figure className="studio__image-block studio__image-block--result">
-            <figcaption className="studio__image-label">Generated</figcaption>
-            <div className="studio__result-frame">
-              {hasResult ? (
+          {/* Each generated image stacked below the original, with its own Share button. */}
+          {present.map(({ slot, url }) => (
+            <figure key={slot} className="studio__image-block studio__image-block--result">
+              <figcaption className="studio__image-label">{SLOT_LABEL[slot]}</figcaption>
+              <div className="studio__result-frame">
                 <img
                   className="studio__image"
-                  src={generatedUrl as string}
-                  alt="Your AI-generated photo"
-                  data-testid="result-image"
+                  src={url}
+                  alt={`Your ${SLOT_LABEL[slot]} photo`}
+                  data-testid={`result-image-${slot}`}
                 />
-              ) : (
+              </div>
+              <div className="studio__image-action">{shareButton(url, slot)}</div>
+            </figure>
+          ))}
+
+          {/* Loading placeholder block, or an empty prompt when nothing yet. */}
+          {phase === "loading" && (
+            <figure className="studio__image-block studio__image-block--result">
+              <div className="studio__result-frame">
+                <div className="studio__result-placeholder">{overlay}</div>
+              </div>
+            </figure>
+          )}
+          {phase !== "loading" && !hasAnyResult && (
+            <figure className="studio__image-block studio__image-block--result">
+              <div className="studio__result-frame">
                 <div className="studio__result-placeholder">
-                  {overlay ?? <span>Pick an effect to generate</span>}
+                  <span>Pick an effect to generate</span>
                 </div>
-              )}
-            </div>
-          </figure>
+              </div>
+            </figure>
+          )}
 
           <div className="studio__meta">{resultMeta}</div>
 
-          <div className="studio__actions">
-            <PrimaryButton testId="new-session-button" onClick={onNewSession}>
-              New Session
-            </PrimaryButton>
-          </div>
+          {actions}
         </div>
 
         <aside className="studio__side studio__side--right">{characters}</aside>
+
+        {shareModal}
       </section>
     );
   }
 
   // Mobile: image (carousel) on top, options stacked below.
+  const slides: CarouselSlide[] = [
+    { key: "original", label: "Original", url: photo },
+    ...present.map(({ slot, url }) => ({ key: slot, label: SLOT_LABEL[slot], url })),
+  ];
+
   return (
     <section
       className="studio studio--mobile"
@@ -354,9 +343,15 @@ export function StudioView({
     >
       <div className="studio__image-area">
         <ImageCarousel
-          originalUrl={photo}
-          generatedUrl={hasResult ? generatedUrl : null}
+          slides={slides}
           generatingOverlay={overlay}
+          // Render a Share button beneath the active slide when it's a generated
+          // one (never for the original).
+          renderSlideAction={(slide) =>
+            slide.key === "original"
+              ? null
+              : shareButton(slide.url, slide.key as "background" | "person" | "merged")
+          }
         />
         <div className="studio__meta">{resultMeta}</div>
       </div>
@@ -366,11 +361,9 @@ export function StudioView({
         {characters}
       </div>
 
-      <div className="studio__actions">
-        <PrimaryButton testId="new-session-button" onClick={onNewSession}>
-          New Session
-        </PrimaryButton>
-      </div>
+      {actions}
+
+      {shareModal}
     </section>
   );
 }

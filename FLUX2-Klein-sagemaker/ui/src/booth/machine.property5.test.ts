@@ -27,7 +27,12 @@ const effectIdArb = fc.string();
 const loadingArb: fc.Arbitrary<LoadingState> = fc.record({
   name: fc.constant("Loading" as const),
   capturedPhoto: photoArb,
-  selectedEffectId: effectIdArb,
+  job: fc.record({
+    kind: fc.constant("effect" as const),
+    effectId: effectIdArb,
+    slot: fc.constantFrom("background" as const, "person" as const),
+  }),
+  results: fc.constant({}),
 });
 
 const errorReasonArb: fc.Arbitrary<ErrorReason> = fc.record({
@@ -40,17 +45,22 @@ const stateArb: fc.Arbitrary<BoothState> = fc.oneof(
   fc.constant<BoothState>({ name: "Start" }),
   fc.constant<BoothState>({ name: "Camera" }),
   fc.record({ name: fc.constant("Review" as const), capturedPhoto: photoArb }),
-  fc.record({ name: fc.constant("Effects" as const), capturedPhoto: photoArb }),
+  fc.record({
+    name: fc.constant("Effects" as const),
+    capturedPhoto: photoArb,
+    results: fc.constant({}),
+  }),
   loadingArb,
   fc.record({
     name: fc.constant("Result" as const),
-    transformedImage: photoArb,
     capturedPhoto: photoArb,
+    results: fc.constant({}),
   }),
   fc.record({
     name: fc.constant("Error" as const),
     reason: errorReasonArb,
     capturedPhoto: photoArb,
+    results: fc.constant({}),
   }),
 );
 
@@ -74,17 +84,19 @@ const ALL_SCREENS: ActiveScreen[] = [
 ];
 
 describe("Property 5: poll result applied to Loading is deterministic; one screen per state", () => {
-  it("READY -> Result carrying the image", () => {
+  it("READY -> Result carrying the image in the job's slot", () => {
     fc.assert(
       fc.property(loadingArb, photoArb, (loading, image) => {
         const next = transition(loading, { type: "POLL", result: { status: "READY", image } });
         expect(next.name).toBe("Result");
-        // Result carries the transformed image and the retained original photo
-        // (so the visitor can regenerate in place), but no loading data.
+        // The arb only produces an "effect" job, so the result lands in that
+        // job's slot, carrying the produced image and the producing effect id,
+        // alongside the retained original photo.
+        const job = loading.job as { kind: "effect"; effectId: string; slot: "background" | "person" };
         expect(next).toEqual({
           name: "Result",
-          transformedImage: image,
           capturedPhoto: loading.capturedPhoto,
+          results: { [job.slot]: { image, effectId: job.effectId } },
         });
       }),
       { numRuns: 100 },

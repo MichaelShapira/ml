@@ -44,14 +44,13 @@ REGION="${REGION:-us-east-1}"
 STACK_NAME="${STACK_NAME:-AiPhotoBoothStack}"
 
 # The shared SageMaker bucket the FLUX endpoint reads/writes. Referenced (not
-# created) by the stack. Leave as-is unless you point the endpoint elsewhere.
-EXISTING_IO_BUCKET="${EXISTING_IO_BUCKET:-sagemaker-us-east-1-346399954218}"
+# created) by the stack, so it MUST already exist in the TARGET account/region.
+# Leave unset to auto-default to that account's standard SageMaker default
+# bucket: sagemaker-<region>-<account-id> (resolved after flag parsing). Pointing
+# at a bucket in a DIFFERENT account causes the CORS custom resource to fail with
+# AccessDenied. Override with --existing-io-bucket if your endpoint uses another.
+EXISTING_IO_BUCKET="${EXISTING_IO_BUCKET:-}"
 
-# Set to "true" when the sender email is already a verified SES identity in the
-# account (CloudFormation cannot create an identity that already exists).
-SENDER_EMAIL_ALREADY_VERIFIED="${SENDER_EMAIL_ALREADY_VERIFIED:-true}"
-
-SENDER_EMAIL="${SENDER_EMAIL:-michshap@amazon.com}"
 ENDPOINT_NAME="${ENDPOINT_NAME:-flux2-klein-9b-g6e2}"
 ENDPOINT_CONFIG_NAME="${ENDPOINT_CONFIG_NAME:-flux2-klein-9b-g6e2}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
@@ -79,8 +78,6 @@ Options (each has a default; flag overrides env var overrides default):
   --region <r>                       AWS region (default: us-east-1)
   --stack-name <name>                CloudFormation stack name
   --existing-io-bucket <bucket>      Shared SageMaker I/O bucket (referenced)
-  --sender-email <email>             Verified SES sender address
-  --sender-email-already-verified <true|false>
   --endpoint-name <name>             SageMaker endpoint name
   --endpoint-config-name <name>      SageMaker endpoint config name
   --admin-username <name>            Initial admin username (default: admin)
@@ -101,8 +98,6 @@ while [[ $# -gt 0 ]]; do
     --region) REGION="$2"; shift 2 ;;
     --stack-name) STACK_NAME="$2"; shift 2 ;;
     --existing-io-bucket) EXISTING_IO_BUCKET="$2"; shift 2 ;;
-    --sender-email) SENDER_EMAIL="$2"; shift 2 ;;
-    --sender-email-already-verified) SENDER_EMAIL_ALREADY_VERIFIED="$2"; shift 2 ;;
     --endpoint-name) ENDPOINT_NAME="$2"; shift 2 ;;
     --endpoint-config-name) ENDPOINT_CONFIG_NAME="$2"; shift 2 ;;
     --admin-username) ADMIN_USERNAME="$2"; shift 2 ;;
@@ -120,6 +115,21 @@ if [[ -z "$ADMIN_PASSWORD" || -z "$VISITOR_PASSWORD" ]]; then
   echo >&2
   usage >&2
   exit 2
+fi
+
+# --- Resolve the I/O bucket default to the TARGET account, if not supplied ---
+# Avoids the cross-account trap: a hardcoded bucket from another account makes
+# the CORS custom resource fail with AccessDenied. Defaults to the deploying
+# account's standard SageMaker bucket (sagemaker-<region>-<account-id>).
+if [[ -z "$EXISTING_IO_BUCKET" ]]; then
+  ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text 2>/dev/null)"
+  if [[ -z "$ACCOUNT_ID" ]]; then
+    echo "ERROR: could not resolve the AWS account id (aws sts get-caller-identity)." >&2
+    echo "       Check your credentials, or pass --existing-io-bucket explicitly." >&2
+    exit 2
+  fi
+  EXISTING_IO_BUCKET="sagemaker-${REGION}-${ACCOUNT_ID}"
+  echo "==> Using I/O bucket (default for this account): $EXISTING_IO_BUCKET"
 fi
 
 # --- Paths -------------------------------------------------------------------
@@ -144,8 +154,6 @@ echo "==> [3/5] Deploying $STACK_NAME"
   CDK_DEFAULT_REGION="$REGION" npx cdk deploy \
     --require-approval never \
     --context existingIoBucketName="$EXISTING_IO_BUCKET" \
-    --context senderEmailAlreadyVerified="$SENDER_EMAIL_ALREADY_VERIFIED" \
-    --parameters SenderEmail="$SENDER_EMAIL" \
     --parameters EndpointName="$ENDPOINT_NAME" \
     --parameters EndpointConfigName="$ENDPOINT_CONFIG_NAME" \
     --parameters InitialAdminUsername="$ADMIN_USERNAME" \
@@ -171,9 +179,10 @@ IO_BUCKET="$(get_output IoBucketName)"
 SCHEDULE_TABLE="$(get_output ScheduleTableName)"
 ENDPOINT_NAME_OUT="$(get_output EndpointNameOutput)"
 ENDPOINT_CONFIG_OUT="$(get_output EndpointConfigNameOutput)"
-SENDER_EMAIL_OUT="$(get_output SenderEmailOutput)"
 INVOKE_FUNCTION_URL="$(get_output InvokeFunctionUrl)"
 DISTRIBUTION_DOMAIN="$(get_output DistributionDomainName)"
+SHARE_BUCKET="$(get_output ShareBucketName)"
+SHARE_SIGNER_URL="$(get_output ShareSignerUrl)"
 
 cat > "$UI_DIR/.env.local" <<EOF
 # Local-dev runtime config for \`npm run dev\`.
@@ -188,7 +197,8 @@ VITE_ENDPOINT_NAME=$ENDPOINT_NAME_OUT
 VITE_ENDPOINT_CONFIG_NAME=$ENDPOINT_CONFIG_OUT
 VITE_IO_BUCKET=$IO_BUCKET
 VITE_SCHEDULE_TABLE=$SCHEDULE_TABLE
-VITE_SENDER_EMAIL=$SENDER_EMAIL_OUT
+VITE_SHARE_BUCKET=$SHARE_BUCKET
+VITE_SHARE_SIGNER_URL=$SHARE_SIGNER_URL
 VITE_TIMEZONE=$SCHEDULER_TIMEZONE
 # IAM-authenticated Invoke_Proxy Function URL (SageMaker runtime has no CORS, so
 # the browser cannot call InvokeEndpointAsync directly).

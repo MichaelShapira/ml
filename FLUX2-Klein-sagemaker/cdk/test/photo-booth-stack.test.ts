@@ -74,9 +74,13 @@ describe("PhotoBoothStack", () => {
     });
   });
 
-  it("provisions a CloudFront distribution with OAC and SPA 403/404 fallback", () => {
-    template.resourceCountIs("AWS::CloudFront::Distribution", 1);
-    template.resourceCountIs("AWS::CloudFront::OriginAccessControl", 1);
+  it("provisions CloudFront distributions with OAC (UI + share signed downloads)", () => {
+    // Two distributions now: the UI hosting distribution and the share-download
+    // distribution (private bucket via OAC, served with signed URLs).
+    template.resourceCountIs("AWS::CloudFront::Distribution", 2);
+    const oacs = template.findResources("AWS::CloudFront::OriginAccessControl");
+    expect(Object.keys(oacs).length).toBeGreaterThanOrEqual(2);
+    // The UI distribution keeps its SPA 403/404 fallback.
     template.hasResourceProperties("AWS::CloudFront::Distribution", {
       DistributionConfig: Match.objectLike({
         DefaultRootObject: "index.html",
@@ -94,6 +98,9 @@ describe("PhotoBoothStack", () => {
         ]),
       }),
     });
+    // The share distribution restricts access with a trusted key group.
+    template.resourceCountIs("AWS::CloudFront::KeyGroup", 1);
+    template.resourceCountIs("AWS::CloudFront::PublicKey", 1);
   });
 
   it("provisions the Scheduler Lambda and two EventBridge rules", () => {
@@ -112,8 +119,14 @@ describe("PhotoBoothStack", () => {
     expect(scheduleRules.length).toBe(2);
   });
 
-  it("provisions a verified SES sender identity for email delivery", () => {
-    template.resourceCountIs("AWS::SES::EmailIdentity", 1);
+  it("provisions the short-lived Share_Bucket (private, with a lifecycle rule)", () => {
+    // The Share_Bucket is created (not referenced) and has an expiration
+    // lifecycle rule for server-side cleanup of shared images.
+    const buckets = template.findResources("AWS::S3::Bucket");
+    const withLifecycle = Object.values(buckets).filter((b) =>
+      Boolean((b.Properties as { LifecycleConfiguration?: unknown }).LifecycleConfiguration),
+    );
+    expect(withLifecycle.length).toBeGreaterThanOrEqual(1);
   });
 
   it("exposes CfnParameters for the initial admin and standard usernames", () => {

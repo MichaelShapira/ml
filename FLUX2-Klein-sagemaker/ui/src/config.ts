@@ -37,8 +37,10 @@ export interface BoothConfig {
   ioBucket: string;
   /** DynamoDB table name backing the Schedule_Store. */
   scheduleTable: string;
-  /** Verified SES sender email address used as the From of result emails. */
-  senderEmail: string;
+  /** Short-lived bucket for the "Share with me" QR download flow. */
+  shareBucket: string;
+  /** IAM-authenticated Share_Signer Function URL (mints CloudFront signed URLs). */
+  shareSignerUrl: string;
   /** IANA timezone the scheduler uses to evaluate Working_Hours (e.g. Asia/Jerusalem). */
   timezone: string;
   /**
@@ -86,7 +88,8 @@ function readRawConfig(): Partial<BoothConfig> {
       injected?.endpointConfigName ?? env?.VITE_ENDPOINT_CONFIG_NAME,
     ioBucket: injected?.ioBucket ?? env?.VITE_IO_BUCKET,
     scheduleTable: injected?.scheduleTable ?? env?.VITE_SCHEDULE_TABLE,
-    senderEmail: injected?.senderEmail ?? env?.VITE_SENDER_EMAIL,
+    shareBucket: injected?.shareBucket ?? env?.VITE_SHARE_BUCKET,
+    shareSignerUrl: injected?.shareSignerUrl ?? env?.VITE_SHARE_SIGNER_URL,
     timezone: injected?.timezone ?? env?.VITE_TIMEZONE,
     invokeFunctionUrl:
       injected?.invokeFunctionUrl ?? env?.VITE_INVOKE_FUNCTION_URL,
@@ -138,7 +141,8 @@ export function getConfig(): BoothConfig {
     endpointConfigName: requireField(raw.endpointConfigName, "endpointConfigName"),
     ioBucket: requireField(raw.ioBucket, "ioBucket"),
     scheduleTable: requireField(raw.scheduleTable, "scheduleTable"),
-    senderEmail: requireField(raw.senderEmail, "senderEmail"),
+    shareBucket: requireField(raw.shareBucket, "shareBucket"),
+    shareSignerUrl: requireField(raw.shareSignerUrl, "shareSignerUrl"),
     // Optional: defaults to the scheduler's default timezone when not injected.
     timezone: raw.timezone && raw.timezone !== "" ? raw.timezone : "Asia/Jerusalem",
     invokeFunctionUrl: requireField(raw.invokeFunctionUrl, "invokeFunctionUrl"),

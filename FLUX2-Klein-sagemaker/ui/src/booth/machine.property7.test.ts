@@ -27,21 +27,27 @@ const stateArb: fc.Arbitrary<BoothState> = fc.oneof(
   fc.constant<BoothState>({ name: "Start" }),
   fc.constant<BoothState>({ name: "Camera" }),
   fc.record({ name: fc.constant("Review" as const), capturedPhoto: photoArb }),
-  fc.record({ name: fc.constant("Effects" as const), capturedPhoto: photoArb }),
+  fc.record({ name: fc.constant("Effects" as const), capturedPhoto: photoArb, results: fc.constant({}) }),
   fc.record({
     name: fc.constant("Loading" as const),
     capturedPhoto: photoArb,
-    selectedEffectId: effectIdArb,
+    job: fc.record({
+      kind: fc.constant("effect" as const),
+      effectId: effectIdArb,
+      slot: fc.constantFrom("background" as const, "person" as const),
+    }),
+    results: fc.constant({}),
   }),
   fc.record({
     name: fc.constant("Result" as const),
-    transformedImage: photoArb,
     capturedPhoto: photoArb,
+    results: fc.constant({}),
   }),
   fc.record({
     name: fc.constant("Error" as const),
     reason: errorReasonArb,
     capturedPhoto: photoArb,
+    results: fc.constant({}),
   }),
 );
 
@@ -52,7 +58,12 @@ const eventArb: fc.Arbitrary<BoothEvent> = fc.oneof(
   fc.record({ type: fc.constant("CAPTURE" as const), photo: photoArb }),
   fc.constant<BoothEvent>({ type: "RESET" }),
   fc.constant<BoothEvent>({ type: "CONTINUE" }),
-  fc.record({ type: fc.constant("SELECT" as const), effectId: effectIdArb }),
+  fc.record({
+    type: fc.constant("SELECT" as const),
+    effectId: effectIdArb,
+    slot: fc.constantFrom("background" as const, "person" as const),
+  }),
+  fc.constant<BoothEvent>({ type: "MERGE" }),
   fc.constant<BoothEvent>({ type: "NEW_SESSION" }),
   fc.constant<BoothEvent>({ type: "IDLE_TIMEOUT" }),
   fc.record({ type: fc.constant("CAMERA_ERROR" as const), reason: fc.string() }),
@@ -64,30 +75,40 @@ const visitorFacingStateArb: fc.Arbitrary<BoothState> = fc.oneof(
   fc.constant<BoothState>({ name: "Start" }),
   fc.constant<BoothState>({ name: "Camera" }),
   fc.record({ name: fc.constant("Review" as const), capturedPhoto: photoArb }),
-  fc.record({ name: fc.constant("Effects" as const), capturedPhoto: photoArb }),
+  fc.record({
+    name: fc.constant("Effects" as const),
+    capturedPhoto: photoArb,
+    results: fc.constant({}),
+  }),
   fc.record({
     name: fc.constant("Loading" as const),
     capturedPhoto: photoArb,
-    selectedEffectId: effectIdArb,
+    job: fc.record({
+      kind: fc.constant("effect" as const),
+      effectId: effectIdArb,
+      slot: fc.constantFrom("background" as const, "person" as const),
+    }),
+    results: fc.constant({}),
   }),
   fc.record({
     name: fc.constant("Result" as const),
-    transformedImage: photoArb,
     capturedPhoto: photoArb,
+    results: fc.constant({}),
   }),
   fc.record({
     name: fc.constant("Error" as const),
     reason: errorReasonArb,
     capturedPhoto: photoArb,
+    results: fc.constant({}),
   }),
 );
 
-/** A Start state must carry no captured photo and no transformed image. */
+/** A Start state must carry no captured photo and no generated results. */
 function expectCleanStart(state: BoothState): void {
   expect(state.name).toBe("Start");
   expect("capturedPhoto" in state).toBe(false);
-  expect("transformedImage" in state).toBe(false);
-  expect("selectedEffectId" in state).toBe(false);
+  expect("results" in state).toBe(false);
+  expect("job" in state).toBe(false);
 }
 
 describe("Property 7: any path back to Start clears all session data", () => {
@@ -105,9 +126,13 @@ describe("Property 7: any path back to Start clears all session data", () => {
 
   it("NEW_SESSION from Result returns to a clean Start", () => {
     fc.assert(
-      fc.property(photoArb, photoArb, (transformedImage, capturedPhoto) => {
+      fc.property(photoArb, photoArb, effectIdArb, (image, capturedPhoto, effectId) => {
         const next = transition(
-          { name: "Result", transformedImage, capturedPhoto },
+          {
+            name: "Result",
+            capturedPhoto,
+            results: { background: { image, effectId } },
+          },
           { type: "NEW_SESSION" },
         );
         expectCleanStart(next);

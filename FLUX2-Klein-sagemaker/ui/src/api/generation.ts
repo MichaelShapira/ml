@@ -37,7 +37,7 @@ import {
   withAuthRetry,
 } from "./awsClients";
 import { invokeEndpointAsyncViaProxy } from "./invokeProxy";
-import { buildAsyncRequest } from "./requestBuilder";
+import { buildAsyncRequest, buildMergeRequest } from "./requestBuilder";
 import { decidePoll, POLL_TIMEOUT_MS, type PollDecision } from "./pollDecision";
 
 /** S3 key prefixes used by the existing async inference flow. */
@@ -51,6 +51,18 @@ export interface SubmitRequest {
   effectId: string;
   /** Captured photo as a base64-encoded PNG/JPEG string. */
   photo: string;
+}
+
+/** Request to {@link submitMerge}. */
+export interface SubmitMergeRequest {
+  /** The fully-formed multi-reference merge prompt. */
+  prompt: string;
+  /**
+   * Reference images in prompt order (image 1, image 2, …). Each may be a raw
+   * base64 string, a `data:` URI, or a `blob:` object URL — object URLs are
+   * fetched and re-encoded to base64 before submission.
+   */
+  images: string[];
 }
 
 /** Handle returned by {@link submitGeneration}, fed back into {@link pollGeneration}. */
@@ -102,25 +114,13 @@ function newJobId(): string {
 }
 
 /**
- * Submit an Async_Request: upload the request JSON to the inputs prefix, then
- * invoke the endpoint asynchronously with that InputLocation (Requirement 8.1).
- *
- * @throws {import("../booth/effects").UnknownEffectError} for an unknown effect.
- * @throws Error when `photo` is missing/empty, or on an SDK failure.
+ * Upload a built Async_Request JSON to the inputs prefix, invoke the endpoint
+ * asynchronously, and return the server-generated output/failure keys to poll.
+ * Shared by {@link submitGeneration} and {@link submitMerge}.
  */
-export async function submitGeneration(req: SubmitRequest): Promise<SubmitResult> {
-  if (!req || typeof req.effectId !== "string" || req.effectId.length === 0) {
-    throw new Error("submitGeneration: effectId is required");
-  }
-  if (typeof req.photo !== "string" || req.photo.length === 0) {
-    throw new Error("submitGeneration: photo is required");
-  }
-
+async function submitAsyncRequest(body: string): Promise<SubmitResult> {
   const config = getConfig();
   const jobId = newJobId();
-  const asyncRequest = buildAsyncRequest({ effectId: req.effectId, photo: req.photo });
-  const body = JSON.stringify(asyncRequest);
-
   const s3 = getS3Client();
 
   // 1) Upload the request JSON to the inputs prefix.
@@ -151,7 +151,7 @@ export async function submitGeneration(req: SubmitRequest): Promise<SubmitResult
   const outputKey = keyFromS3Uri(invokeResult.outputLocation);
   if (!outputKey) {
     throw new Error(
-      "submitGeneration: endpoint did not return an OutputLocation to poll",
+      "submitAsyncRequest: endpoint did not return an OutputLocation to poll",
     );
   }
   const failureKey = keyFromS3Uri(invokeResult.failureLocation);
@@ -162,6 +162,67 @@ export async function submitGeneration(req: SubmitRequest): Promise<SubmitResult
     outputKey,
     ...(failureKey ? { failureKey } : {}),
   };
+}
+
+/**
+ * Submit an Async_Request: upload the request JSON to the inputs prefix, then
+ * invoke the endpoint asynchronously with that InputLocation (Requirement 8.1).
+ *
+ * @throws {import("../booth/effects").UnknownEffectError} for an unknown effect.
+ * @throws Error when `photo` is missing/empty, or on an SDK failure.
+ */
+export async function submitGeneration(req: SubmitRequest): Promise<SubmitResult> {
+  if (!req || typeof req.effectId !== "string" || req.effectId.length === 0) {
+    throw new Error("submitGeneration: effectId is required");
+  }
+  if (typeof req.photo !== "string" || req.photo.length === 0) {
+    throw new Error("submitGeneration: photo is required");
+  }
+
+  const asyncRequest = buildAsyncRequest({ effectId: req.effectId, photo: req.photo });
+  return submitAsyncRequest(JSON.stringify(asyncRequest));
+}
+
+/**
+ * Read an image reference (raw base64, `data:` URI, or `blob:` object URL) and
+ * return a raw base64 payload suitable for the endpoint. Object URLs (the
+ * generated results held by the booth) are fetched and re-encoded; data URIs
+ * and bare base64 are normalized by the request builder downstream.
+ */
+async function toBase64Payload(ref: string): Promise<string> {
+  if (!ref.startsWith("blob:")) {
+    // Already a data URI or raw base64 — the request builder strips any prefix.
+    return ref;
+  }
+  const blob = await (await fetch(ref)).blob();
+  const dataUrl: string = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read image blob"));
+    reader.onload = () => resolve(String(reader.result));
+    reader.readAsDataURL(blob);
+  });
+  return dataUrl;
+}
+
+/**
+ * Submit a multi-reference MERGE: re-encode any object-URL references to
+ * base64, build the merge request (prompt + all references), then upload +
+ * invoke like a normal generation. Returns a poll handle just like
+ * {@link submitGeneration}.
+ *
+ * @throws Error when the prompt is empty or fewer than two images are given.
+ */
+export async function submitMerge(req: SubmitMergeRequest): Promise<SubmitResult> {
+  if (!req || typeof req.prompt !== "string" || req.prompt.length === 0) {
+    throw new Error("submitMerge: prompt is required");
+  }
+  if (!Array.isArray(req.images) || req.images.length < 2) {
+    throw new Error("submitMerge: at least two reference images are required");
+  }
+
+  const images = await Promise.all(req.images.map(toBase64Payload));
+  const asyncRequest = buildMergeRequest({ prompt: req.prompt, images });
+  return submitAsyncRequest(JSON.stringify(asyncRequest));
 }
 
 /** True iff a HeadObject succeeds (object exists); false on a 404/NotFound. */

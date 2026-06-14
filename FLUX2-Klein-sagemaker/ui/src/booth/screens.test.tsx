@@ -14,13 +14,14 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// StudioView imports ../api/email (which pulls in the AWS client chain).
+// StudioView imports ../api/share (which pulls in the AWS client chain).
 // Stub it so these presentational tests don't instantiate AWS clients/config.
-vi.mock("../api/email", () => ({
-  sendPhotoEmail: vi.fn().mockResolvedValue(undefined),
-  isValidEmail: (e: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.trim()),
-  InvalidEmailError: class extends Error {},
-  EmailDeliveryError: class extends Error {},
+vi.mock("../api/share", () => ({
+  shareImage: vi.fn().mockResolvedValue({
+    url: "https://example.com/presigned",
+    expiresInSeconds: 900,
+  }),
+  SHARE_TTL_SECONDS: 900,
 }));
 
 import { StartScreen } from "./StartScreen";
@@ -61,6 +62,7 @@ describe("StudioView effects (Req 5.2/5.3/6.2/6.3, 5.6, 4.3)", () => {
     layout: "mobile" as const,
     photo: "data:image/png;base64,AAA",
     onSelect: vi.fn(),
+    onMerge: vi.fn(),
     onNewSession: vi.fn(),
   };
 
@@ -70,11 +72,11 @@ describe("StudioView effects (Req 5.2/5.3/6.2/6.3, 5.6, 4.3)", () => {
     // The original photo is shown alongside the options (mobile carousel image).
     expect(screen.getByTestId("carousel-image")).toBeInTheDocument();
 
-    // All 12 catalog options are rendered.
+    // All catalog options are rendered.
     for (const effect of EFFECTS) {
       expect(screen.getByTestId(`effect-${effect.id}`)).toBeInTheDocument();
     }
-    expect(screen.getAllByRole("listitem")).toHaveLength(12);
+    expect(screen.getAllByRole("listitem")).toHaveLength(EFFECTS.length);
 
     // Spot-check required membership labels.
     expect(screen.getByText("Spaceship interior")).toBeInTheDocument();
@@ -89,7 +91,7 @@ describe("StudioView effects (Req 5.2/5.3/6.2/6.3, 5.6, 4.3)", () => {
       <StudioView {...baseProps} phase="idle" onSelect={onSelect} />,
     );
     fireEvent.click(screen.getByTestId("effect-bg_spaceship"));
-    expect(onSelect).toHaveBeenCalledWith("bg_spaceship");
+    expect(onSelect).toHaveBeenCalledWith("bg_spaceship", "background");
 
     rerender(
       <StudioView
@@ -113,12 +115,13 @@ describe("StudioView result (Req 10.2, 10.3)", () => {
         layout="monitor"
         photo="data:image/png;base64,AAA"
         phase="result"
-        generatedUrl="blob:abc"
+        results={{ person: "blob:abc" }}
         onSelect={vi.fn()}
+        onMerge={vi.fn()}
         onNewSession={onNewSession}
       />,
     );
-    expect(screen.getByTestId("result-image")).toBeInTheDocument();
+    expect(screen.getByTestId("result-image-person")).toBeInTheDocument();
     expect(screen.getByTestId("ai-generated-notice")).toHaveTextContent(/ai-generated/i);
     fireEvent.click(screen.getByTestId("new-session-button"));
     expect(onNewSession).toHaveBeenCalledOnce();
@@ -130,23 +133,94 @@ describe("StudioView result (Req 10.2, 10.3)", () => {
         layout="mobile"
         photo="data:image/png;base64,AAA"
         phase="result"
-        generatedUrl="blob:abc"
+        results={{ person: "blob:abc" }}
         onSelect={vi.fn()}
+        onMerge={vi.fn()}
         onNewSession={vi.fn()}
       />,
     );
     // Both carousel tabs are present so the visitor can compare.
-    expect(screen.getByTestId("carousel-original-tab")).toBeInTheDocument();
-    expect(screen.getByTestId("carousel-generated-tab")).toBeInTheDocument();
-    // Defaults to showing the generated image.
+    expect(screen.getByTestId("carousel-tab-original")).toBeInTheDocument();
+    expect(screen.getByTestId("carousel-tab-person")).toBeInTheDocument();
+    // Defaults to showing the newest generated image.
     expect(
       (screen.getByTestId("carousel-image") as HTMLImageElement).src,
     ).toContain("blob:abc");
     // Toggling to Original swaps the image.
-    fireEvent.click(screen.getByTestId("carousel-original-tab"));
+    fireEvent.click(screen.getByTestId("carousel-tab-original"));
     expect(
       (screen.getByTestId("carousel-image") as HTMLImageElement).src,
     ).toContain("data:image/png;base64,AAA");
+  });
+
+  it("shows a Merge button only once both background and character images exist", () => {
+    const onMerge = vi.fn();
+    const props = {
+      layout: "monitor" as const,
+      photo: "data:image/png;base64,AAA",
+      phase: "result" as const,
+      onSelect: vi.fn(),
+      onNewSession: vi.fn(),
+    };
+    const { rerender } = render(
+      <StudioView {...props} results={{ background: "blob:bg" }} onMerge={onMerge} />,
+    );
+    // Only one source image so far: no merge offered.
+    expect(screen.queryByTestId("merge-button")).not.toBeInTheDocument();
+
+    rerender(
+      <StudioView
+        {...props}
+        results={{ background: "blob:bg", person: "blob:person" }}
+        onMerge={onMerge}
+      />,
+    );
+    const mergeBtn = screen.getByTestId("merge-button");
+    fireEvent.click(mergeBtn);
+    expect(onMerge).toHaveBeenCalledOnce();
+  });
+
+  it("offers a 'Share with me' button per generated image and opens the QR modal on click", async () => {
+    render(
+      <StudioView
+        layout="monitor"
+        photo="data:image/png;base64,AAA"
+        phase="result"
+        results={{ person: "blob:abc" }}
+        onSelect={vi.fn()}
+        onMerge={vi.fn()}
+        onNewSession={vi.fn()}
+      />,
+    );
+    // A share button sits next to the generated image.
+    const shareBtn = screen.getByTestId("share-button-person");
+    fireEvent.click(shareBtn);
+    // The QR modal opens and, once the (mocked) presign resolves, shows the
+    // scan instruction and the 15-minute validity. On the monitor (kiosk) there
+    // is no "click to download" — that is smartphone-only.
+    expect(await screen.findByTestId("share-modal")).toBeInTheDocument();
+    expect(await screen.findByTestId("share-ttl")).toHaveTextContent(/15 minutes/i);
+    expect(screen.getByTestId("share-instruction")).toHaveTextContent(/scan/i);
+    expect(screen.queryByTestId("share-download")).not.toBeInTheDocument();
+  });
+
+  it("offers a tap-to-download link in the share modal on mobile (smartphone) only", async () => {
+    render(
+      <StudioView
+        layout="mobile"
+        photo="data:image/png;base64,AAA"
+        phase="result"
+        results={{ person: "blob:abc" }}
+        onSelect={vi.fn()}
+        onMerge={vi.fn()}
+        onNewSession={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("share-button-person"));
+    expect(await screen.findByTestId("share-modal")).toBeInTheDocument();
+    // Smartphone: both scan AND tap-to-download are offered.
+    expect(await screen.findByTestId("share-download")).toHaveTextContent(/download/i);
+    expect(screen.getByTestId("share-instruction")).toHaveTextContent(/scan|download/i);
   });
 });
 

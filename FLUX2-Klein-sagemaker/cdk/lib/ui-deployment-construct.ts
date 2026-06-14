@@ -31,7 +31,10 @@ export interface UiRuntimeConfig {
   endpointConfigName: string;
   ioBucket: string;
   scheduleTable: string;
-  senderEmail: string;
+  /** Short-lived Share_Bucket for the "Share with me" QR download flow. */
+  shareBucket: string;
+  /** IAM-authenticated Share_Signer Function URL (mints CloudFront signed URLs). */
+  shareSignerUrl: string;
   timezone: string;
   /** IAM-authenticated Lambda Function URL the SPA signs to invoke the endpoint. */
   invokeFunctionUrl: string;
@@ -113,7 +116,8 @@ export class UiDeploymentConstruct extends Construct {
         endpointConfigName: config.endpointConfigName,
         ioBucket: config.ioBucket,
         scheduleTable: config.scheduleTable,
-        senderEmail: config.senderEmail,
+        shareBucket: config.shareBucket,
+        shareSignerUrl: config.shareSignerUrl,
         timezone: config.timezone,
         invokeFunctionUrl: config.invokeFunctionUrl,
       },

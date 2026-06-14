@@ -22,19 +22,31 @@ import {
   initialState,
   type BoothState,
   type BoothEvent,
+  type GeneratedResults,
 } from "./machine";
 import { StartScreen } from "./StartScreen";
 import { CameraView } from "./CameraView";
 import { ReviewScreen } from "./ReviewScreen";
-import { StudioView, type StudioPhase } from "./StudioView";
+import { StudioView, type StudioPhase, type StudioResults } from "./StudioView";
+import { buildMergePrompt } from "./effects";
 import { useLayoutMode } from "./useLayoutMode";
 import { LOADING_MESSAGES, messageForElapsed } from "./loadingMessages";
 import {
   submitGeneration,
+  submitMerge,
   pollGeneration,
   revokeResult,
   type SubmitResult,
 } from "../api/generation";
+
+/** Map the machine's per-slot results to the studio's renderable URL map. */
+function toStudioResults(results: GeneratedResults): StudioResults {
+  return {
+    background: results.background?.image ?? null,
+    person: results.person?.image ?? null,
+    merged: results.merged?.image ?? null,
+  };
+}
 
 /** Poll cadence while a generation is in flight. */
 const POLL_INTERVAL_MS = 2000;
@@ -64,7 +76,11 @@ export function BoothFlow({ isAuthenticated, isAdmin = false }: BoothFlowProps) 
   // Mutable refs for the in-flight generation so effects can cancel cleanly.
   const submissionRef = useRef<SubmitResult | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const resultUrlRef = useRef<string | null>(null);
+  // All generated object URLs produced this session. A session can hold several
+  // at once (background, character, merged) and regenerating a slot creates a
+  // new one, so we track them as a set and revoke them all when the session
+  // ends rather than juggling a single URL.
+  const resultUrlsRef = useRef<Set<string>>(new Set());
   const cancelledRef = useRef(false);
 
   const send = useCallback((event: BoothEvent) => dispatch(event), []);
@@ -86,12 +102,12 @@ export function BoothFlow({ isAuthenticated, isAdmin = false }: BoothFlowProps) 
     }
   }, []);
 
-  // Revoke the previous result URL whenever we leave a Result/Loading lifecycle.
-  const revokePreviousResult = useCallback(() => {
-    if (resultUrlRef.current) {
-      revokeResult(resultUrlRef.current);
-      resultUrlRef.current = null;
+  // Revoke every generated object URL produced this session and clear the set.
+  const revokeAllResults = useCallback(() => {
+    for (const url of resultUrlsRef.current) {
+      revokeResult(url);
     }
+    resultUrlsRef.current.clear();
   }, []);
 
   // Drive submission + polling when entering Loading with a selected effect.
@@ -115,7 +131,7 @@ export function BoothFlow({ isAuthenticated, isAdmin = false }: BoothFlowProps) 
           return;
         }
         if (result.status === "READY") {
-          resultUrlRef.current = result.imageUrl;
+          resultUrlsRef.current.add(result.imageUrl);
           send({ type: "POLL", result: { status: "READY", image: result.imageUrl } });
         } else if (result.status === "FAILED") {
           send({ type: "POLL", result: { status: "FAILED" } });
@@ -133,13 +149,31 @@ export function BoothFlow({ isAuthenticated, isAdmin = false }: BoothFlowProps) 
 
     const start = async () => {
       try {
-        // Revoke any previous result URL before generating a new one (regenerate
-        // in place replaces the prior result).
-        revokePreviousResult();
-        const handle = await submitGeneration({
-          effectId: state.selectedEffectId,
-          photo: state.capturedPhoto,
-        });
+        // Branch on the in-flight job: a single-effect generation submits the
+        // captured photo with the effect's prompt; a merge submits the two
+        // existing generated images with a synthesized multi-reference prompt.
+        const job = state.job;
+        let handle: SubmitResult;
+        if (job.kind === "merge") {
+          const bg = state.results.background;
+          const person = state.results.person;
+          if (!bg || !person || bg.effectId === null || person.effectId === null) {
+            // Should never happen — the machine only starts a merge when both
+            // source slots are filled — but guard so we fail gracefully.
+            throw new Error("merge requested without both source images");
+          }
+          // By convention the background result is image 1 and the character
+          // result is image 2 (the merge prompt references them in that order).
+          handle = await submitMerge({
+            prompt: buildMergePrompt(bg.effectId, person.effectId),
+            images: [bg.image, person.image],
+          });
+        } else {
+          handle = await submitGeneration({
+            effectId: job.effectId,
+            photo: state.capturedPhoto,
+          });
+        }
         submissionRef.current = handle;
         if (!stopped && !cancelledRef.current) {
           void poll(handle);
@@ -160,15 +194,15 @@ export function BoothFlow({ isAuthenticated, isAdmin = false }: BoothFlowProps) 
     // Re-run only when entering a NEW Loading (effect/photo identify the job).
   }, [state.name, send, clearPollTimer]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Clean up the result URL + submission whenever we return to Start.
+  // Clean up the result URLs + submission whenever we return to Start.
   useEffect(() => {
     if (state.name === "Start") {
       cancelledRef.current = true;
       clearPollTimer();
       submissionRef.current = null;
-      revokePreviousResult();
+      revokeAllResults();
     }
-  }, [state.name, clearPollTimer, revokePreviousResult]);
+  }, [state.name, clearPollTimer, revokeAllResults]);
 
   // Idle auto-reset for the kiosk: after a period of NO user interaction, return
   // to Start so the booth is ready for the next visitor. Important details:
@@ -208,8 +242,8 @@ export function BoothFlow({ isAuthenticated, isAdmin = false }: BoothFlowProps) 
     };
   }, [state.name, send]);
 
-  // Revoke result URL on unmount.
-  useEffect(() => () => revokePreviousResult(), [revokePreviousResult]);
+  // Revoke result URLs on unmount.
+  useEffect(() => () => revokeAllResults(), [revokeAllResults]);
 
   // Rotate the loading message while a generation is in flight.
   useEffect(() => {
@@ -249,11 +283,10 @@ export function BoothFlow({ isAuthenticated, isAdmin = false }: BoothFlowProps) 
     case "Loading":
     case "Result":
     case "Error": {
-      // The studio co-presents the photo, the effect options, and the result.
-      // Derive the photo + phase + payload from whichever state we're in.
+      // The studio co-presents the photo, the effect options, and any generated
+      // results. Derive the photo + phase + results from whichever state we're in.
       let photo: string;
       let phase: StudioPhase;
-      let generatedUrl: string | null = null;
       let errorMessage: string | undefined;
 
       switch (state.name) {
@@ -268,7 +301,6 @@ export function BoothFlow({ isAuthenticated, isAdmin = false }: BoothFlowProps) 
         case "Result":
           photo = state.capturedPhoto;
           phase = "result";
-          generatedUrl = state.transformedImage;
           break;
         case "Error":
           photo = state.capturedPhoto;
@@ -283,15 +315,18 @@ export function BoothFlow({ isAuthenticated, isAdmin = false }: BoothFlowProps) 
           return null;
       }
 
+      const results = toStudioResults(state.results);
+
       return (
         <StudioView
           layout={layout}
           photo={photo}
           phase={phase}
-          generatedUrl={generatedUrl}
+          results={results}
           loadingMessage={loadingMessage}
           errorMessage={errorMessage}
-          onSelect={(effectId) => send({ type: "SELECT", effectId })}
+          onSelect={(effectId, slot) => send({ type: "SELECT", effectId, slot })}
+          onMerge={() => send({ type: "MERGE" })}
           onNewSession={() => send({ type: "NEW_SESSION" })}
         />
       );

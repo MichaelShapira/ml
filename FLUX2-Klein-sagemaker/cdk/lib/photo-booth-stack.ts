@@ -17,7 +17,7 @@ import { HostingConstruct } from "./hosting-construct";
 import { SchedulerConstruct } from "./scheduler-construct";
 import { InitialUsersCustomResource } from "./initial-users-cr";
 import { UiDeploymentConstruct } from "./ui-deployment-construct";
-import { EmailConstruct } from "./email-construct";
+import { ShareConstruct } from "./share-construct";
 import { IoBucketCorsConstruct } from "./io-bucket-cors-construct";
 import { InvokeConstruct } from "./invoke-construct";
 import { CostAllocationTagConstruct } from "./cost-allocation-tag-construct";
@@ -137,16 +137,6 @@ export class PhotoBoothStack extends Stack {
       minLength: 1,
     });
 
-    // Verified SES sender email address used as the From of "email my photo"
-    // messages. Required (no default) and account/operator-specific. SES emails
-    // a verification link to this address on first deploy.
-    const senderEmail = new CfnParameter(this, "SenderEmail", {
-      type: "String",
-      description:
-        "Verified SES sender email address used as the From of result emails (e.g. booth@example.com).",
-      minLength: 3,
-    });
-
     // Name of the managed FLUX.2 async endpoint. Defaults to the existing
     // endpoint; surfaced as a parameter so the stack can target a differently
     // named endpoint without code changes.
@@ -172,13 +162,6 @@ export class PhotoBoothStack extends Stack {
       "initialUserTemporaryPassword",
     ) as string | undefined;
 
-    // When set, the SES sender identity is REFERENCED, not created — use this
-    // when the sender email is already a verified SES identity in the account
-    // (CloudFormation cannot create an identity that already exists).
-    const senderEmailAlreadyVerified =
-      this.node.tryGetContext("senderEmailAlreadyVerified") === true ||
-      this.node.tryGetContext("senderEmailAlreadyVerified") === "true";
-
     // -------------------------------------------------------------------------
     // 1. Data layer — Schedule_Store + async I/O bucket + policy factories.
     // -------------------------------------------------------------------------
@@ -188,24 +171,14 @@ export class PhotoBoothStack extends Stack {
     });
 
     // -------------------------------------------------------------------------
-    // 1b. Email — verified SES sender identity for "email my photo".
-    // -------------------------------------------------------------------------
-    const emailService = new EmailConstruct(this, "Email", {
-      senderEmail: senderEmail.valueAsString,
-      useExistingIdentity: senderEmailAlreadyVerified,
-    });
-
-    // -------------------------------------------------------------------------
     // 2. Auth — Cognito + Identity Pool + Authenticated_Role/Admin_Role.
-    //    Scoped with the data layer's bucket + table and the SES sender so any
-    //    signed-in visitor can email their photo from the verified address.
+    //    Scoped with the data layer's bucket + table. (Share-bucket access is
+    //    granted below, once the Share_Bucket exists.)
     // -------------------------------------------------------------------------
     const auth = new AuthConstruct(this, "Auth", {
       ioBucket: data.ioBucket,
       scheduleTable: data.scheduleTable,
       endpointName: endpointName.valueAsString,
-      senderIdentityArn: emailService.senderIdentityArn,
-      senderEmail: senderEmail.valueAsString,
     });
 
     // -------------------------------------------------------------------------
@@ -226,6 +199,27 @@ export class PhotoBoothStack extends Stack {
       ioBucketName: data.ioBucket.bucketName,
       distributionDomainName: hosting.distributionDomainName,
     });
+
+    // -------------------------------------------------------------------------
+    // 3b-ii. Share_Bucket — short-lived storage for the "Share with me" QR
+    //     download flow. The browser uploads the chosen generated image here and
+    //     presigns a 15-minute GET URL rendered as a QR code. Created (not
+    //     referenced) so CORS + lifecycle are set on the L2 bucket directly.
+    // -------------------------------------------------------------------------
+    const share = new ShareConstruct(this, "Share", {
+      allowedOrigins: [
+        `https://${hosting.distributionDomainName}`,
+        "http://localhost:5173",
+        "http://localhost:5174",
+      ],
+    });
+    // Least privilege: visitor + admin roles may UPLOAD their image (PutObject
+    // on shared/*) and INVOKE the IAM-authed signer that mints a CloudFront
+    // signed URL. Reads go through CloudFront (OAC), not the visitor's role.
+    share.grantUpload(auth.authenticatedRole);
+    share.grantUpload(auth.adminRole);
+    share.grantInvokeSigner(auth.authenticatedRole);
+    share.grantInvokeSigner(auth.adminRole);
 
     // -------------------------------------------------------------------------
     // 3c. Invoke_Proxy — the SageMaker runtime API does not support CORS, so the
@@ -287,7 +281,8 @@ export class PhotoBoothStack extends Stack {
         endpointConfigName: endpointConfigName.valueAsString,
         ioBucket: data.ioBucket.bucketName,
         scheduleTable: data.scheduleTable.tableName,
-        senderEmail: senderEmail.valueAsString,
+        shareBucket: share.bucket.bucketName,
+        shareSignerUrl: share.signerUrl.url,
         timezone: schedulerTimezone.valueAsString,
         invokeFunctionUrl: invoke.functionUrl.url,
       },
@@ -341,6 +336,22 @@ export class PhotoBoothStack extends Stack {
       description: "Async I/O S3 bucket name (inputs/outputs/failures prefixes).",
       value: data.ioBucket.bucketName,
     });
+    new CfnOutput(this, "ShareBucketName", {
+      description: "Short-lived Share_Bucket for the 'Share with me' QR download flow.",
+      value: share.bucket.bucketName,
+    });
+    new CfnOutput(this, "ShareSignerUrl", {
+      description: "IAM-authenticated Share_Signer Function URL the SPA calls to mint a CloudFront signed URL.",
+      value: share.signerUrl.url,
+    });
+    new CfnOutput(this, "ShareDistributionDomainName", {
+      description: "CloudFront domain serving signed share downloads from the private share bucket.",
+      value: share.distribution.distributionDomainName,
+    });
+    new CfnOutput(this, "ShareSignerPrivateKeySecretArn", {
+      description: "Secrets Manager ARN to seed with the RSA private key (put-secret-value).",
+      value: share.privateKeySecret.secretArn,
+    });
     new CfnOutput(this, "Region", {
       description: "AWS region the stack is deployed to.",
       value: this.region,
@@ -352,10 +363,6 @@ export class PhotoBoothStack extends Stack {
     new CfnOutput(this, "EndpointConfigNameOutput", {
       description: "SageMaker endpoint configuration name used by CreateEndpoint.",
       value: endpointConfigName.valueAsString,
-    });
-    new CfnOutput(this, "SenderEmailOutput", {
-      description: "Verified SES sender address (verify the link SES emails before sending).",
-      value: emailService.senderEmail,
     });
     new CfnOutput(this, "InvokeFunctionUrl", {
       description:

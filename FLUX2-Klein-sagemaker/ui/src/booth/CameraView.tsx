@@ -50,8 +50,18 @@ export function CameraView({ onCapture, allowUpload = false }: CameraViewProps) 
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error("Camera API is not available in this browser.");
       }
+      // Request the highest practical resolution. `ideal` is best-effort: the
+      // browser picks the closest mode the camera actually supports and never
+      // throws OverconstrainedError (unlike `min`/`exact`), so an HD webcam
+      // yields 1080p/720p while a low-res one still works at its best mode.
+      // Without these hints browsers default to ~640x480, which is what made
+      // the captured photo look poor.
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" },
+        video: {
+          facingMode: "user",
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
         audio: false,
       });
       streamRef.current = stream;
@@ -93,6 +103,10 @@ export function CameraView({ onCapture, allowUpload = false }: CameraViewProps) 
     if (!ctx) {
       return;
     }
+    // Capture at the camera's full native resolution (canvas == videoWidth/
+    // videoHeight) and keep rendering crisp.
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
     // The live preview is mirrored (CSS `scaleX(-1)`) so it feels like a mirror.
     // Mirror the capture too so the saved photo matches what the visitor saw,
     // rather than flipping left/right at the moment of capture.

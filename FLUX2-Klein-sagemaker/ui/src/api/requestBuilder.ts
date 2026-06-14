@@ -8,7 +8,7 @@
  * server-side caller would.
  */
 
-import { getPromptForEffect } from "../booth/effects";
+import { getPromptForEffect, getRequestOverridesForEffect } from "../booth/effects";
 
 /** A single JSON inference request submitted to the FLUX2_Endpoint. */
 export interface AsyncRequest {
@@ -20,6 +20,14 @@ export interface AsyncRequest {
   num_inference_steps: number;
   /** Guidance scale, clamped to the booth range [1, 10]. */
   guidance_scale: number;
+  /**
+   * Optional output width in px. Omitted for most effects (the endpoint then
+   * derives the size from the reference image); set by effects that need a
+   * specific output shape, e.g. a tall portrait for a half-body crop.
+   */
+  width?: number;
+  /** Optional output height in px (see {@link AsyncRequest.width}). */
+  height?: number;
   /** Optional fixed seed for reproducible generation. */
   seed?: number;
 }
@@ -84,10 +92,76 @@ export function buildAsyncRequest({
   guidance,
   seed,
 }: BuildAsyncRequestParams): AsyncRequest {
+  // Per-effect overrides (output size / sampling). Precedence for steps and
+  // guidance: explicit caller argument > effect override > booth default.
+  const overrides = getRequestOverridesForEffect(effectId);
+
   const request: AsyncRequest = {
     inputs: getPromptForEffect(effectId),
     // Strip any data-URI prefix so the endpoint receives raw base64 only.
     images: [stripDataUriPrefix(photo)],
+    num_inference_steps: resolveInRange(
+      steps,
+      overrides.steps ?? DEFAULTS.num_inference_steps,
+      STEPS_RANGE.min,
+      STEPS_RANGE.max,
+    ),
+    guidance_scale: resolveInRange(
+      guidance,
+      overrides.guidance ?? DEFAULTS.guidance_scale,
+      GUIDANCE_RANGE.min,
+      GUIDANCE_RANGE.max,
+    ),
+  };
+  // Pass an explicit output size only when the effect requests one; the
+  // endpoint clamps to [256,1536] and snaps to a multiple of 16.
+  if (overrides.width !== undefined) {
+    request.width = overrides.width;
+  }
+  if (overrides.height !== undefined) {
+    request.height = overrides.height;
+  }
+  if (seed !== undefined) {
+    request.seed = seed;
+  }
+  return request;
+}
+
+/** Parameters for {@link buildMergeRequest}. */
+export interface BuildMergeRequestParams {
+  /** The fully-formed multi-reference merge prompt (see `buildMergePrompt`). */
+  prompt: string;
+  /**
+   * Reference images, in prompt order (image 1, image 2, …), as base64 strings.
+   * Any `data:` URI prefix is stripped so the endpoint receives raw base64. The
+   * endpoint accepts up to 4 references; the booth merge uses exactly 2.
+   */
+  images: string[];
+  /** Optional override for `num_inference_steps`; defaults to {@link DEFAULTS}. */
+  steps?: number;
+  /** Optional override for `guidance_scale`; defaults to {@link DEFAULTS}. */
+  guidance?: number;
+  /** Optional fixed seed; passed through unchanged when provided. */
+  seed?: number;
+}
+
+/**
+ * Build an {@link AsyncRequest} for a multi-reference MERGE: an explicit prompt
+ * plus two or more reference images. Unlike {@link buildAsyncRequest} (which
+ * resolves a single effect prompt and sends `[photo]`), this passes the prompt
+ * through verbatim and forwards every reference image, so the endpoint composes
+ * across all of them.
+ */
+export function buildMergeRequest({
+  prompt,
+  images,
+  steps,
+  guidance,
+  seed,
+}: BuildMergeRequestParams): AsyncRequest {
+  const request: AsyncRequest = {
+    inputs: prompt,
+    images: images.map(stripDataUriPrefix),
     num_inference_steps: resolveInRange(
       steps,
       DEFAULTS.num_inference_steps,

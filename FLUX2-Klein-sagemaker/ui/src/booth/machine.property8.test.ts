@@ -25,6 +25,7 @@ describe("Property 8: Review CONTINUE retains the photo; RESET discards it", () 
         expect(next).toEqual({
           name: "Effects",
           capturedPhoto: review.capturedPhoto,
+          results: {},
         });
       }),
       { numRuns: 100 },

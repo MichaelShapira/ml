@@ -30,7 +30,6 @@ import { SageMakerRuntimeClient } from "@aws-sdk/client-sagemaker-runtime";
 import { SageMakerClient } from "@aws-sdk/client-sagemaker";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
-import { SESv2Client } from "@aws-sdk/client-sesv2";
 import { CostExplorerClient } from "@aws-sdk/client-cost-explorer";
 import type { AwsCredentialIdentityProvider } from "@aws-sdk/types";
 
@@ -82,7 +81,6 @@ let sageMakerRuntimeClient: SageMakerRuntimeClient | undefined;
 let sageMakerClient: SageMakerClient | undefined;
 let dynamoBaseClient: DynamoDBClient | undefined;
 let dynamoDocClient: DynamoDBDocumentClient | undefined;
-let sesClient: SESv2Client | undefined;
 let costExplorerClient: CostExplorerClient | undefined;
 
 /** S3 client for async-inference input upload and output/failure polling. */
@@ -140,17 +138,6 @@ export function getDynamoClient(): DynamoDBDocumentClient {
   return dynamoDocClient;
 }
 
-/** SES v2 client for sending the visitor's photo by email (raw MIME). */
-export function getSesClient(): SESv2Client {
-  if (!sesClient) {
-    sesClient = new SESv2Client({
-      region: getConfig().region,
-      credentials: credentialsProvider,
-    });
-  }
-  return sesClient;
-}
-
 /**
  * Cost Explorer client for the admin cost panel (read-only GetCostAndUsage).
  *
@@ -178,14 +165,12 @@ export function resetAwsClients(): void {
   sageMakerClient?.destroy();
   // Destroying the Document client tears down its underlying base client.
   dynamoDocClient?.destroy();
-  sesClient?.destroy();
   costExplorerClient?.destroy();
   s3Client = undefined;
   sageMakerRuntimeClient = undefined;
   sageMakerClient = undefined;
   dynamoBaseClient = undefined;
   dynamoDocClient = undefined;
-  sesClient = undefined;
   costExplorerClient = undefined;
 }
 

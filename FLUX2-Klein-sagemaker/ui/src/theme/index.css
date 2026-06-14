@@ -515,6 +515,16 @@ input[type="date"]:focus {
 
 .review-screen__actions > * {
   flex: 1 1 0;
+  min-width: 0;
+}
+
+/* The Continue control is a block PrimaryButton whose large hero padding +
+   font can overflow on narrow phones. Constrain padding and clamp the font so
+   the label always fits the button box. */
+.review-screen__actions .touch-button {
+  padding: var(--space-md) var(--space-sm);
+  font-size: var(--font-size-md);
+  white-space: nowrap;
 }
 
 /* ----------------------------------------------------------------------------
@@ -635,6 +645,90 @@ input[type="date"]:focus {
   font-weight: var(--font-weight-medium);
 }
 
+/* Celebratory "salute" shown when the photo email sends successfully: a brief
+   confetti burst plus a waving party emoji. Purely decorative (aria-hidden);
+   the success text carries the accessible status. */
+.email-celebration {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 3.5rem;
+  margin-bottom: var(--space-xs);
+  pointer-events: none;
+}
+
+.email-celebration__wave {
+  font-size: 2rem;
+  animation: email-celebration-pop 600ms ease-out both,
+    email-celebration-wave 900ms ease-in-out 600ms 2;
+  transform-origin: 70% 70%;
+}
+
+.email-celebration__confetti {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  opacity: 0;
+  background: var(--color-primary);
+  animation: email-celebration-burst 900ms ease-out forwards;
+}
+
+.email-celebration__confetti--1 {
+  background: var(--color-connected);
+}
+
+.email-celebration__confetti--2 {
+  background: #ffd166;
+}
+
+/* Fan the nine confetti pieces out in a circle. */
+.email-celebration__confetti:nth-child(1) { --angle: 0deg; }
+.email-celebration__confetti:nth-child(2) { --angle: 40deg; }
+.email-celebration__confetti:nth-child(3) { --angle: 80deg; }
+.email-celebration__confetti:nth-child(4) { --angle: 120deg; }
+.email-celebration__confetti:nth-child(5) { --angle: 160deg; }
+.email-celebration__confetti:nth-child(6) { --angle: 200deg; }
+.email-celebration__confetti:nth-child(7) { --angle: 240deg; }
+.email-celebration__confetti:nth-child(8) { --angle: 280deg; }
+.email-celebration__confetti:nth-child(9) { --angle: 320deg; }
+
+@keyframes email-celebration-burst {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -50%) rotate(var(--angle)) translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-2.75rem) scale(0.4);
+  }
+}
+
+@keyframes email-celebration-pop {
+  0% { transform: scale(0); }
+  70% { transform: scale(1.25); }
+  100% { transform: scale(1); }
+}
+
+@keyframes email-celebration-wave {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(18deg); }
+  75% { transform: rotate(-12deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .email-celebration__wave,
+  .email-celebration__confetti {
+    animation: none;
+  }
+  .email-celebration__confetti {
+    opacity: 0;
+  }
+}
+
 /* ----------------------------------------------------------------------------
  * App shell (top bar + tabs)
  * ------------------------------------------------------------------------- */
@@ -690,6 +784,19 @@ input[type="date"]:focus {
   display: flex;
   gap: var(--space-sm);
   padding: var(--space-md) var(--space-lg) 0;
+}
+
+/* The three view tabs share the row equally and must shrink to fit narrow
+   phones. Without this they keep the base TouchButton's large font + padding
+   and the labels (e.g. "Endpoints") overflow the button box. */
+.admin-tab__nav .touch-button {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: var(--space-sm) var(--space-xs);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .endpoint-panel__list,
@@ -954,6 +1061,13 @@ input[type="date"]:focus {
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
+  width: 100%;
+}
+
+/* The merge action shares the actions column with New Session. Give it a
+   subtle accent border so it reads as the "combine" affordance that only
+   appears once both a background and a character image exist. */
+.studio__actions [data-testid="merge-button"] {
   width: 100%;
 }
 
@@ -1426,4 +1540,118 @@ input[type="date"]:focus {
   font-size: var(--font-size-sm);
   padding: var(--space-sm) var(--space-md);
   white-space: nowrap;
+}
+
+/* ----------------------------------------------------------------------------
+ * Share with me — QR download button + modal (replaces the email feature)
+ * ------------------------------------------------------------------------- */
+
+/* Share button placed beneath each generated image. */
+.studio__image-action {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  margin-top: var(--space-sm);
+}
+
+.image-carousel__action {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  margin-top: var(--space-sm);
+}
+
+/* Full-screen modal overlay holding the QR code. */
+.share-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-lg);
+  background: rgba(11, 13, 18, 0.82);
+}
+
+.share-modal__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  width: 100%;
+  max-width: 420px;
+  padding: var(--space-xl);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+.share-modal__title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  color: var(--color-text);
+}
+
+/* White padding box around the SVG QR so the quiet zone sits on pure white. */
+.share-modal__qr {
+  display: inline-flex;
+  padding: var(--space-md);
+  background: #fff;
+  border-radius: var(--radius-sm);
+  line-height: 0;
+}
+
+.share-modal__qr svg {
+  display: block;
+  width: auto;
+  height: auto;
+}
+
+/* The "ready" state stacks title, QR, instruction, download, TTL — all centered
+   in a column so the text aligns under the QR rather than spilling wider. */
+.share-modal__ready {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  width: 100%;
+}
+
+.share-modal__instruction {
+  margin: 0 auto;
+  font-size: var(--font-size-md);
+  color: var(--color-text);
+  max-width: 26ch;
+  text-align: center;
+  text-wrap: balance;
+}
+
+.share-modal__download {
+  display: inline-block;
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--color-primary);
+  color: var(--color-primary-text);
+  border-radius: var(--radius-pill);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+}
+
+.share-modal__ttl {
+  margin: 0;
+  font-size: var(--font-size-md);
+  color: var(--color-muted);
+}
+
+.share-modal__loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  color: var(--color-text);
+}
+
+.share-modal__error {
+  margin: 0;
+  color: var(--color-danger);
 }

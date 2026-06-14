@@ -18,20 +18,24 @@ import {
 const photoArb = fc.string();
 const effectIdArb = fc.string();
 
+const slotArb = fc.constantFrom("background" as const, "person" as const);
+
 const effectsArb: fc.Arbitrary<EffectsState> = fc.record({
   name: fc.constant("Effects" as const),
   capturedPhoto: photoArb,
+  results: fc.constant({}),
 });
 
 describe("Property 6: effect selection enters Loading and locks the first selection", () => {
-  it("SELECT from Effects -> Loading with the chosen effect and retained photo", () => {
+  it("SELECT from Effects -> Loading with the chosen effect+slot and retained photo", () => {
     fc.assert(
-      fc.property(effectsArb, effectIdArb, (effects, effectId) => {
-        const next = transition(effects, { type: "SELECT", effectId });
+      fc.property(effectsArb, effectIdArb, slotArb, (effects, effectId, slot) => {
+        const next = transition(effects, { type: "SELECT", effectId, slot });
         expect(next).toEqual({
           name: "Loading",
           capturedPhoto: effects.capturedPhoto,
-          selectedEffectId: effectId,
+          results: effects.results,
+          job: { kind: "effect", effectId, slot },
         });
       }),
       { numRuns: 100 },
@@ -43,24 +47,31 @@ describe("Property 6: effect selection enters Loading and locks the first select
       fc.property(
         effectsArb,
         effectIdArb,
-        fc.array(effectIdArb, { maxLength: 10 }),
-        (effects, firstEffectId, laterEffectIds) => {
+        slotArb,
+        fc.array(fc.tuple(effectIdArb, slotArb), { maxLength: 10 }),
+        (effects, firstEffectId, firstSlot, later) => {
           // First selection locks in the effect and begins Loading.
-          const loading = transition(effects, { type: "SELECT", effectId: firstEffectId });
+          const loading = transition(effects, {
+            type: "SELECT",
+            effectId: firstEffectId,
+            slot: firstSlot,
+          });
           expect(loading.name).toBe("Loading");
 
           // Replay any sequence of further SELECT events while Loading.
-          const selectEvents: BoothEvent[] = laterEffectIds.map((effectId) => ({
+          const selectEvents: BoothEvent[] = later.map(([effectId, slot]) => ({
             type: "SELECT",
             effectId,
+            slot,
           }));
           const result = selectEvents.reduce(transition, loading);
 
-          // State stays Loading and the recorded effect is still the first one.
+          // State stays Loading and the recorded job is still the first one.
           expect(result).toEqual({
             name: "Loading",
             capturedPhoto: effects.capturedPhoto,
-            selectedEffectId: firstEffectId,
+            results: effects.results,
+            job: { kind: "effect", effectId: firstEffectId, slot: firstSlot },
           });
         },
       ),
