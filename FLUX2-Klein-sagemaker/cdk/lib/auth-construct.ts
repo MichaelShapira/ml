@@ -4,6 +4,7 @@ import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as iam from "aws-cdk-lib/aws-iam";
 import type * as s3 from "aws-cdk-lib/aws-s3";
 import type * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import { PROMPT_OVERRIDE_PK } from "./data-construct";
 
 /**
  * The S3 prefixes used by the existing FLUX.2 async inference endpoint.
@@ -182,10 +183,14 @@ export class AuthConstruct extends Construct {
     // Authenticated_Role: capture/effect flow only.
     this.authenticatedRole = new iam.Role(this, "AuthenticatedRole", {
       description:
-        "Photo booth Standard_User role: capture/effect flow only (no SageMaker mgmt, no DynamoDB).",
+        "Photo booth Standard_User role: capture/effect flow + read-only effect prompts (no SageMaker mgmt, no schedule writes).",
       assumedBy: this.identityPoolPrincipal(),
     });
-    for (const statement of this.captureFlowStatements(props.ioBucket, endpointArn)) {
+    for (const statement of this.captureFlowStatements(
+      props.ioBucket,
+      endpointArn,
+      props.scheduleTable.tableArn,
+    )) {
       this.authenticatedRole.addToPolicy(statement);
     }
 
@@ -196,7 +201,11 @@ export class AuthConstruct extends Construct {
         "Photo booth Admin_User role: capture/effect flow PLUS SageMaker endpoint mgmt + Schedule_Store writes.",
       assumedBy: this.identityPoolPrincipal(),
     });
-    for (const statement of this.captureFlowStatements(props.ioBucket, endpointArn)) {
+    for (const statement of this.captureFlowStatements(
+      props.ioBucket,
+      endpointArn,
+      props.scheduleTable.tableArn,
+    )) {
       this.adminRole.addToPolicy(statement);
     }
     for (const statement of this.adminStatements(
@@ -275,6 +284,7 @@ export class AuthConstruct extends Construct {
   private captureFlowStatements(
     ioBucket: s3.IBucket,
     endpointArn: string,
+    scheduleTableArn: string,
   ): iam.PolicyStatement[] {
     return [
       // Submit the async inference request to the FLUX.2 endpoint.
@@ -311,6 +321,22 @@ export class AuthConstruct extends Construct {
         conditions: {
           StringLike: {
             "s3:prefix": [`${OUTPUTS_PREFIX}*`, `${FAILURES_PREFIX}*`],
+          },
+        },
+      }),
+      // Read-only access to the per-effect prompt overrides, scoped (via the
+      // DynamoDB leading-key condition) to ONLY the prompt partition so a
+      // standard user can pick up admin-customized prompts but cannot read or
+      // touch Working_Hours / managed-config items. The Admin_Role additionally
+      // gets full table access via adminStatements (overlap is harmless).
+      new iam.PolicyStatement({
+        sid: "ReadEffectPrompts",
+        effect: iam.Effect.ALLOW,
+        actions: ["dynamodb:Query", "dynamodb:GetItem"],
+        resources: [scheduleTableArn],
+        conditions: {
+          "ForAllValues:StringEquals": {
+            "dynamodb:LeadingKeys": [PROMPT_OVERRIDE_PK],
           },
         },
       }),

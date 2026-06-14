@@ -1,5 +1,5 @@
 import * as path from "path";
-import { Duration, RemovalPolicy } from "aws-cdk-lib";
+import { CustomResource, Duration, Names, RemovalPolicy } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as iam from "aws-cdk-lib/aws-iam";
@@ -9,31 +9,13 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
+import { Provider } from "aws-cdk-lib/custom-resources";
 
 /** Key prefix under which the browser uploads images to be shared. */
 export const SHARE_PREFIX = "shared/";
 
 /** Access window for a shared image (CloudFront signed-URL expiry). */
 export const SHARE_TTL_SECONDS = 15 * 60;
-
-/**
- * RSA public key (SPKI PEM) used by CloudFront to VERIFY the signed-URL
- * signatures. Public keys are not secret, so this is safe to embed. The MATCHING
- * private key is NOT in the repo — it is stored in Secrets Manager (seeded
- * post-deploy) and read only by the signer Lambda.
- *
- * To rotate: generate a new pair (`openssl genrsa` + `openssl rsa -pubout`),
- * replace this PEM, and put the new private key into the Secrets Manager secret.
- */
-const SHARE_SIGNER_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2KmuJ+nL0m22DGSRVDdK
-lMlR9vkAbGS6zsB/LKsdqMRY3l7YBQi8/JitDGhkHuNTWSPP3fKwcRuEuq33YcwS
-oV8SzRYdcI+N/Y287W5xAqqQIqTzMrwNdMQoYx7DkNMeV5WQehwAQaBjesdCN8ux
-fQ3UdHSrRaXc8FmrR2UKKubYZSG5VHuAJp1yDMjD/pNhuvnYrhVMEEfdyZ7Pgcwy
-Wx5XNo2bzxFmngnfcOTIgvDRSiWF2/plrFMEGaYJzPx9RswmYMsAUWCCaqedlPPt
-BzFUtjZ4iFscl1aYJrxvx1CRA3B4uMe3S5H6Vs26S+7+GF2qIM7IoxUxkUwZSFDz
-mwIDAQAB
------END PUBLIC KEY-----`;
 
 /** Absolute path to the Share_Signer Lambda source. */
 const SHARE_SIGNER_ENTRY = path.join(
@@ -133,15 +115,65 @@ export class ShareConstruct extends Construct {
       ],
     });
 
-    // --- CloudFront signing key group (public key) -------------------------
-    const publicKey = new cloudfront.PublicKey(this, "ShareSignerPublicKey", {
-      encodedKey: SHARE_SIGNER_PUBLIC_KEY_PEM,
-      comment: "AI Photo Booth share-download URL signing key",
+    // --- Secrets Manager: the RSA private key (generated at deploy) --------
+    // Created empty; the KeyGen custom resource below writes the generated
+    // private key into it. Never committed, never on a developer machine.
+    this.privateKeySecret = new secretsmanager.Secret(this, "ShareSignerPrivateKey", {
+      description:
+        "RSA private key (PEM) used by the Share_Signer to sign CloudFront URLs. Generated at deploy by the KeyGen custom resource.",
+      removalPolicy: RemovalPolicy.DESTROY,
     });
-    const keyGroup = new cloudfront.KeyGroup(this, "ShareKeyGroup", {
-      items: [publicKey],
-      comment: "AI Photo Booth share-download trusted key group",
+
+    // --- KeyGen custom resource: generate the RSA pair AT DEPLOY -----------
+    // On create it generates a fresh 2048-bit RSA pair, stores the PRIVATE key
+    // in Secrets Manager, and returns ONLY the PUBLIC key (PEM) as an attribute
+    // (public keys are not secret). On update it derives the public key from the
+    // stored private key so the value is STABLE across deploys (no CloudFront
+    // key replacement, no broken signatures). This removes the committed public
+    // key and the manual post-deploy seeding entirely, and gives each account
+    // its own isolated key pair.
+    const keyGenFn = new lambda.Function(this, "ShareKeyGenFn", {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: "index.handler",
+      timeout: Duration.minutes(1),
+      code: lambda.Code.fromInline(KEYGEN_FN_SOURCE),
     });
+    this.privateKeySecret.grantRead(keyGenFn);
+    this.privateKeySecret.grantWrite(keyGenFn);
+
+    const keyGenProvider = new Provider(this, "ShareKeyGenProvider", {
+      onEventHandler: keyGenFn,
+    });
+    const keyGen = new CustomResource(this, "ShareKeyGen", {
+      serviceToken: keyGenProvider.serviceToken,
+      resourceType: "Custom::ShareSignerKeyGen",
+      properties: { SecretArn: this.privateKeySecret.secretArn },
+    });
+    keyGen.node.addDependency(this.privateKeySecret);
+
+    // --- CloudFront signing key group (public key from KeyGen) -------------
+    // L1 resources: the encoded key is a custom-resource attribute (a token),
+    // which the L2 PublicKey would reject at synth via its PEM regex.
+    const cfnPublicKey = new cloudfront.CfnPublicKey(this, "ShareSignerPublicKey", {
+      publicKeyConfig: {
+        name: `${Names.uniqueId(this)}-share-signer-key`.slice(-128),
+        callerReference: `${Names.uniqueId(this)}-share-signer-key`,
+        encodedKey: keyGen.getAttString("PublicKeyPem"),
+        comment: "AI Photo Booth share-download URL signing key (deploy-generated)",
+      },
+    });
+    const cfnKeyGroup = new cloudfront.CfnKeyGroup(this, "ShareKeyGroup", {
+      keyGroupConfig: {
+        name: `${Names.uniqueId(this)}-share-key-group`.slice(-128),
+        items: [cfnPublicKey.attrId],
+        comment: "AI Photo Booth share-download trusted key group",
+      },
+    });
+    const keyGroup = cloudfront.KeyGroup.fromKeyGroupId(
+      this,
+      "ShareKeyGroupRef",
+      cfnKeyGroup.attrId,
+    );
 
     // --- CloudFront distribution: OAC origin + trusted key group -----------
     // The bucket stays private; OAC lets ONLY this distribution read it, and the
@@ -157,13 +189,6 @@ export class ShareConstruct extends Construct {
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
         trustedKeyGroups: [keyGroup],
       },
-    });
-
-    // --- Secrets Manager: the RSA private key (seeded post-deploy) ---------
-    this.privateKeySecret = new secretsmanager.Secret(this, "ShareSignerPrivateKey", {
-      description:
-        "RSA private key (PEM) used by the Share_Signer to sign CloudFront URLs. Seed via put-secret-value.",
-      removalPolicy: RemovalPolicy.DESTROY,
     });
 
     // --- Signer Lambda role: read ONLY the private-key secret + Logs -------
@@ -196,7 +221,7 @@ export class ShareConstruct extends Construct {
       timeout: Duration.seconds(15),
       environment: {
         SHARE_CLOUDFRONT_DOMAIN: this.distribution.distributionDomainName,
-        SHARE_KEY_PAIR_ID: publicKey.publicKeyId,
+        SHARE_KEY_PAIR_ID: cfnPublicKey.attrId,
         SHARE_PRIVATE_KEY_SECRET_ID: this.privateKeySecret.secretArn,
         SHARE_TTL_SECONDS: String(SHARE_TTL_SECONDS),
       },
@@ -260,3 +285,52 @@ export class ShareConstruct extends Construct {
 }
 
 export default ShareConstruct;
+
+/**
+ * Inline handler source for the KeyGen custom resource (Node.js 20). On Create
+ * it generates a fresh RSA-2048 pair, stores the PRIVATE key in Secrets Manager,
+ * and returns the PUBLIC key (SPKI PEM) as a resource attribute. On Update it
+ * derives the public key from the stored private key so the value is stable
+ * (no CloudFront key replacement). Delete is a no-op. Uses only Node built-ins
+ * (`crypto`) + the Secrets Manager SDK bundled in the Lambda runtime.
+ */
+const KEYGEN_FN_SOURCE = `
+const { generateKeyPairSync, createPublicKey } = require("crypto");
+const { SecretsManagerClient, GetSecretValueCommand, PutSecretValueCommand } = require("@aws-sdk/client-secrets-manager");
+const sm = new SecretsManagerClient({});
+
+async function readKey(secretId) {
+  try {
+    const out = await sm.send(new GetSecretValueCommand({ SecretId: secretId }));
+    if (out.SecretString && out.SecretString.includes("PRIVATE KEY")) return out.SecretString;
+  } catch (e) { /* not set yet */ }
+  return null;
+}
+
+exports.handler = async (event) => {
+  const physicalId = "share-signer-keygen";
+  if (event.RequestType === "Delete") return { PhysicalResourceId: physicalId };
+
+  const secretId = event.ResourceProperties.SecretArn;
+  let privateKeyPem = null;
+
+  // On update, reuse the existing key so the public key (and CloudFront config)
+  // stays stable. On create, always generate a fresh pair (rotates away from any
+  // previously-seeded shared key, avoiding a duplicate-encoded-key collision).
+  if (event.RequestType === "Update") {
+    privateKeyPem = await readKey(secretId);
+  }
+  if (!privateKeyPem) {
+    const { privateKey } = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: "spki", format: "pem" },
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    });
+    privateKeyPem = privateKey;
+    await sm.send(new PutSecretValueCommand({ SecretId: secretId, SecretString: privateKeyPem }));
+  }
+
+  const publicKeyPem = createPublicKey(privateKeyPem).export({ type: "spki", format: "pem" }).toString();
+  return { PhysicalResourceId: physicalId, Data: { PublicKeyPem: publicKeyPem } };
+};
+`;

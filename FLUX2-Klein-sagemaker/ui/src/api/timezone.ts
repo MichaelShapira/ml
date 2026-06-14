@@ -69,6 +69,19 @@ export function addMinutesCapped(time: string, minutes: number): string {
   return fromMinutes(Math.min(base + minutes, 23 * 60 + 59));
 }
 
+/**
+ * Subtract `minutes` from an `HH:mm` time, floored at `00:00` (does not roll
+ * into the previous day). Used when a manual STOP closes today's window by
+ * setting its end to just before "now".
+ */
+export function subtractMinutesFloored(time: string, minutes: number): string {
+  const base = toMinutes(time);
+  if (base === null) {
+    return time;
+  }
+  return fromMinutes(Math.max(base - minutes, 0));
+}
+
 /** Return the earlier of two `HH:mm` times (malformed inputs are ignored). */
 export function minTime(a: string, b: string): string {
   const ma = toMinutes(a);

@@ -1256,12 +1256,15 @@ input[type="date"]:focus {
 
 .image-carousel__controls {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-sm);
   justify-content: center;
 }
 
 .image-carousel__tab {
-  flex: 1 1 0;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
   padding: var(--space-sm) var(--space-md);
   background: var(--color-surface);
   color: var(--color-muted);
@@ -1270,6 +1273,9 @@ input[type="date"]:focus {
   font-family: inherit;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
   touch-action: manipulation;
 }

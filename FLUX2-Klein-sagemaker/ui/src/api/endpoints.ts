@@ -21,12 +21,14 @@ import {
 
 import { getSageMakerClient, withAuthRetry } from "./awsClients";
 import { EndpointStatus, mapStatus, canStart, canStop } from "./statusMap";
-import { putWorkingHours, listWorkingHours, getCurrentConfigName, setCurrentConfigName, listManagedConfigs, addManagedConfig, removeManagedConfig } from "./schedule";
+import { putWorkingHours, listWorkingHours, deleteWorkingHours, getCurrentConfigName, setCurrentConfigName, listManagedConfigs, addManagedConfig, removeManagedConfig } from "./schedule";
 import {
   nowInScheduleTz,
   addMinutesCapped,
+  subtractMinutesFloored,
   minTime,
   maxTime,
+  toMinutes,
 } from "./timezone";
 
 export { EndpointStatus, statusLabel } from "./statusMap";
@@ -335,5 +337,50 @@ export async function stopEndpoint(name: string): Promise<EndpointActionResult> 
   await withAuthRetry(() =>
     sm.send(new DeleteEndpointCommand({ EndpointName: name })),
   );
-  return { ok: true, message: "Endpoint deletion started." };
+
+  // Close today's Working_Hours window so the scheduler does NOT immediately
+  // recreate the endpoint we just deleted. The scheduler keeps the endpoint
+  // running while "now" is within today's [startTime, endTime); shortening the
+  // end to one minute before "now" (in the scheduler's timezone) moves "now"
+  // past the window so the next reconcile leaves it stopped. Best-effort: a
+  // failure here doesn't block the stop.
+  try {
+    const now = nowInScheduleTz();
+    const today = (await listWorkingHours()).find((wh) => wh.day === now.day);
+    if (today) {
+      const startM = toMinutes(today.startTime);
+      const endM = toMinutes(today.endTime);
+      const nowM = toMinutes(now.time);
+      // Only act when the scheduler would otherwise restart it, i.e. "now" is
+      // currently inside today's window. (Outside it, the scheduler already
+      // keeps it stopped, so there is nothing to close.)
+      if (startM !== null && endM !== null && nowM !== null && nowM >= startM && nowM < endM) {
+        const newEnd = subtractMinutesFloored(now.time, 1);
+        if (toMinutes(newEnd)! > startM) {
+          // Shorten the window to end just before now (stays valid: end > start).
+          await putWorkingHours({
+            day: now.day,
+            startTime: today.startTime,
+            endTime: newEnd,
+            updatedBy: "manual-stop",
+          });
+        } else {
+          // now is at/just after the start minute; a valid shortened window is
+          // not possible, so remove today's window entirely to guarantee the
+          // scheduler does not restart it today.
+          await deleteWorkingHours(now.day);
+        }
+      }
+    }
+  } catch {
+    // Best-effort: if closing the window fails, the worst case is the scheduler
+    // recreates the endpoint on its next tick.
+  }
+
+  return {
+    ok: true,
+    message:
+      "Endpoint deletion started. Today's schedule was closed so the " +
+      "scheduler will not restart it; reopen it from the Schedule tab if needed.",
+  };
 }

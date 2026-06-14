@@ -63,30 +63,37 @@ interface PromptOverrideItem {
  * back to catalog defaults (e.g. when a standard user's role lacks the read).
  */
 export async function loadEffectPrompts(): Promise<Map<string, string>> {
-  const config = getConfig();
-  const doc = getDynamoClient();
-  const response = await withAuthRetry(() =>
-    doc.send(
+  const overrides = new Map<string, string>();
+  try {
+    const config = getConfig();
+    const doc = getDynamoClient();
+    // Best-effort: a plain send (NOT withAuthRetry). The credentials provider
+    // still does a silent token refresh, but we must NEVER trigger the
+    // sign-out path here — a standard user whose role cannot read this
+    // partition (or any transient error) must fall back to catalog defaults,
+    // not get bounced to the sign-in screen. So all errors are swallowed.
+    const response = await doc.send(
       new QueryCommand({
         TableName: config.scheduleTable,
         KeyConditionExpression: "pk = :pk",
         ExpressionAttributeValues: { ":pk": PROMPT_OVERRIDE_PK },
       }),
-    ),
-  );
-  const items = (response.Items ?? []) as Partial<PromptOverrideItem>[];
-  const overrides = new Map<string, string>();
-  for (const item of items) {
-    if (
-      item.isCustom === true &&
-      typeof item.effectId === "string" &&
-      typeof item.prompt === "string" &&
-      item.prompt.length > 0 &&
-      // Ignore rows for effect ids the current build no longer knows about.
-      findEffect(item.effectId) !== undefined
-    ) {
-      overrides.set(item.effectId, item.prompt);
+    );
+    const items = (response.Items ?? []) as Partial<PromptOverrideItem>[];
+    for (const item of items) {
+      if (
+        item.isCustom === true &&
+        typeof item.effectId === "string" &&
+        typeof item.prompt === "string" &&
+        item.prompt.length > 0 &&
+        // Ignore rows for effect ids the current build no longer knows about.
+        findEffect(item.effectId) !== undefined
+      ) {
+        overrides.set(item.effectId, item.prompt);
+      }
     }
+  } catch {
+    // Swallow — fall back to catalog defaults. Do not sign the user out.
   }
   applyPromptOverrides(overrides);
   return overrides;
