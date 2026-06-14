@@ -1,0 +1,129 @@
+<mxfile host="drawio.corp.amazon.com" modified="2026-06-14T09:06:53.865Z" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36" version="21.7.4" etag="0CdlwcTOQLSK9Fhnm_H-" type="device">
+  <diagram id="ai-photo-booth-arch" name="AI Photo Booth Architecture">
+    <mxGraphModel dx="1647" dy="858" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="AI Photo Booth — Serverless Architecture (no per-request backend; the browser calls AWS directly using Cognito IAM credentials)" style="text;html=1;fontSize=15;fontStyle=1;align=center;verticalAlign=middle;" parent="1" vertex="1">
+          <mxGeometry x="280" y="90" width="640" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="user" value="Visitor / Admin&#xa;(Browser SPA)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.user;" parent="1" vertex="1">
+          <mxGeometry x="100" y="1180" width="78" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="cf_ui" value="CloudFront (UI) + OAC" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudfront;" parent="1" vertex="1">
+          <mxGeometry x="40" y="316" width="78" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="s3_ui" value="UI Bucket (private)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#60A337;gradientDirection=north;fillColor=#277116;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;" parent="1" vertex="1">
+          <mxGeometry x="304" y="320" width="70" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="cognito_up" value="Cognito User Pool&#xa;(sign-in)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F54749;gradientDirection=north;fillColor=#C7131F;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cognito;" parent="1" vertex="1">
+          <mxGeometry x="488" y="510" width="78" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="cognito_ip" value="Cognito Identity Pool&#xa;(STS temp creds)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F54749;gradientDirection=north;fillColor=#C7131F;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cognito;" parent="1" vertex="1">
+          <mxGeometry x="300" y="620" width="78" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="lambda_invoke" value="Invoke Proxy Lambda&#xa;(Function URL, IAM)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F58534;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;" parent="1" vertex="1">
+          <mxGeometry x="600" y="200" width="78" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="lambda_share" value="Share Signer Lambda&#xa;(Function URL, IAM)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F58534;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;" parent="1" vertex="1">
+          <mxGeometry x="410" y="316" width="78" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="lambda_sched" value="Scheduler Lambda" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F58534;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;" parent="1" vertex="1">
+          <mxGeometry x="600" y="520" width="78" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="eventbridge" value="EventBridge&#xa;(start/stop rules)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F34482;gradientDirection=north;fillColor=#B0084D;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.eventbridge;" parent="1" vertex="1">
+          <mxGeometry x="802" y="660" width="78" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="lambda_seed" value="Prompt Seed + Initial Users&#xa;(deploy-time custom resources)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F58534;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;" parent="1" vertex="1">
+          <mxGeometry x="600" y="810" width="78" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="s3_io" value="S3 I/O Bucket&#xa;(inputs/outputs/failures)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#60A337;gradientDirection=north;fillColor=#277116;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;" parent="1" vertex="1">
+          <mxGeometry x="1460" y="204" width="70" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="s3_share" value="Share Bucket&#xa;(15-min TTL lifecycle)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#60A337;gradientDirection=north;fillColor=#277116;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;" parent="1" vertex="1">
+          <mxGeometry x="880" y="390" width="70" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="dynamo" value="DynamoDB Schedule_Store&#xa;(schedule, configs, prompts)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#4D72F3;gradientDirection=north;fillColor=#3334B9;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;" parent="1" vertex="1">
+          <mxGeometry x="1030" y="650" width="78" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="secrets" value="Secrets Manager&#xa;(RSA signing key)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F54749;gradientDirection=north;fillColor=#C7131F;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.secrets_manager;" parent="1" vertex="1">
+          <mxGeometry x="1180" y="780" width="78" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="sagemaker" value="SageMaker Async Endpoint&#xa;(FLUX.2 [klein] 9B)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#4AB29A;gradientDirection=north;fillColor=#116D5B;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.sagemaker;" parent="1" vertex="1">
+          <mxGeometry x="1160" y="200" width="78" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="cf_share" value="CloudFront (Share)&#xa;signed URLs + OAC" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudfront;" parent="1" vertex="1">
+          <mxGeometry x="1322" y="950" width="78" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" value="loads SPA (HTTPS)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="user" target="cf_ui" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" value="OAC origin" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="cf_ui" target="s3_ui" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" value="sign in" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="user" target="cognito_up" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" value="ID token" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="cognito_up" target="cognito_ip" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" value="get STS temp creds" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="user" target="cognito_ip" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" value="SigV4 (IAM) invoke" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="user" target="lambda_invoke" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" value="InvokeEndpointAsync" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="lambda_invoke" target="sagemaker" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" value="resolve current endpoint" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="lambda_invoke" target="dynamo" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" value="PutObject input / poll output (SigV4)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="user" target="s3_io" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" value="read input / write output" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;startArrow=block;endArrow=block;fontSize=10;" parent="1" source="sagemaker" target="s3_io" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" value="prompts / schedule / configs (SigV4)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;startArrow=block;endArrow=block;fontSize=10;" parent="1" source="user" target="dynamo" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" value="PutObject image (SigV4)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="user" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="200.0045454545455" y="1324" as="sourcePoint" />
+            <mxPoint x="905.55" y="530" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="139" y="1324" />
+              <mxPoint x="896" y="1324" />
+              <mxPoint x="896" y="530" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e13" value="SigV4 (IAM) get signed URL" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="user" target="lambda_share" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e14" value="read RSA key" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="lambda_share" target="secrets" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e15" value="mint signed URL" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="lambda_share" target="cf_share" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e16" value="OAC origin (download)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="cf_share" target="s3_share" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e17" value="cron trigger" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="eventbridge" target="lambda_sched" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e18" value="start / stop endpoint" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="lambda_sched" target="sagemaker" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e19" value="read Working_Hours" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="lambda_sched" target="dynamo" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e20" value="seed prompts (deploy)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" parent="1" source="lambda_seed" target="dynamo" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

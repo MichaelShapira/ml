@@ -30,6 +30,7 @@ import {
 } from "./effects";
 import { ImageCarousel, type CarouselSlide } from "./ImageCarousel";
 import { ShareQrModal, type ShareState } from "./ShareQrModal";
+import { PromptEditModal } from "./PromptEditModal";
 import { TouchButton, PrimaryButton } from "../theme";
 import { shareImage } from "../api/share";
 import type { LayoutMode } from "./useLayoutMode";
@@ -69,6 +70,11 @@ export interface StudioViewProps {
   onMerge: () => void;
   /** Start a fresh session (discard everything, back to Start). */
   onNewSession: () => void;
+  /**
+   * When true (admin), each effect button shows a small "Edit prompt" control
+   * that opens the prompt editor. Cosmetic gate — IAM enforces write access.
+   */
+  isAdmin?: boolean;
 }
 
 /** Human-readable caption for each result slot. */
@@ -86,6 +92,8 @@ function OptionColumn({
   locked,
   layout,
   onSelect,
+  isAdmin,
+  onEditPrompt,
 }: {
   title: string;
   options: readonly EffectOption[];
@@ -93,6 +101,8 @@ function OptionColumn({
   locked: boolean;
   layout: LayoutMode;
   onSelect: (effectId: string, slot: Slot) => void;
+  isAdmin: boolean;
+  onEditPrompt: (effectId: string) => void;
 }) {
   return (
     <div className="studio__option-group">
@@ -101,26 +111,39 @@ function OptionColumn({
         {options.map((option) => {
           const imageUrl = effectImageUrl(option, layout);
           return (
-            <TouchButton
-              key={option.id}
-              role="listitem"
-              variant="secondary"
-              disabled={locked}
-              testId={`effect-${option.id}`}
-              className={imageUrl ? "studio__option--with-image" : undefined}
-              onClick={() => onSelect(option.id, slot)}
-            >
-              {imageUrl && (
-                <img
-                  className="studio__option-thumb"
-                  src={imageUrl}
-                  alt=""
-                  aria-hidden="true"
-                  loading="lazy"
-                />
+            <div key={option.id} className="studio__option-item" role="listitem">
+              <TouchButton
+                variant="secondary"
+                disabled={locked}
+                testId={`effect-${option.id}`}
+                className={imageUrl ? "studio__option--with-image" : undefined}
+                onClick={() => onSelect(option.id, slot)}
+              >
+                {imageUrl && (
+                  <img
+                    className="studio__option-thumb"
+                    src={imageUrl}
+                    alt=""
+                    aria-hidden="true"
+                    loading="lazy"
+                  />
+                )}
+                <span className="studio__option-label">{option.label}</span>
+              </TouchButton>
+              {isAdmin && (
+                <button
+                  type="button"
+                  className="studio__option-edit"
+                  data-testid={`effect-edit-${option.id}`}
+                  aria-label={`Edit prompt for ${option.label}`}
+                  title="Edit prompt (admin)"
+                  disabled={locked}
+                  onClick={() => onEditPrompt(option.id)}
+                >
+                  ✎
+                </button>
               )}
-              <span className="studio__option-label">{option.label}</span>
-            </TouchButton>
+            </div>
           );
         })}
       </div>
@@ -152,11 +175,15 @@ export function StudioView({
   onSelect,
   onMerge,
   onNewSession,
+  isAdmin = false,
 }: StudioViewProps) {
   const locked = phase === "loading";
 
   // "Share with me" state for the QR overlay.
   const [share, setShare] = useState<ShareState>({ status: "idle" });
+
+  // Admin: which effect's prompt is being edited (null = modal closed).
+  const [editingEffectId, setEditingEffectId] = useState<string | null>(null);
 
   const handleShare = useCallback(async (imageUrl: string) => {
     setShare({ status: "loading" });
@@ -210,6 +237,8 @@ export function StudioView({
       locked={locked}
       layout={layout}
       onSelect={onSelect}
+      isAdmin={isAdmin}
+      onEditPrompt={setEditingEffectId}
     />
   );
   const characters = (
@@ -220,6 +249,8 @@ export function StudioView({
       locked={locked}
       layout={layout}
       onSelect={onSelect}
+      isAdmin={isAdmin}
+      onEditPrompt={setEditingEffectId}
     />
   );
 
@@ -259,6 +290,15 @@ export function StudioView({
   );
 
   const shareModal = <ShareQrModal state={share} layout={layout} onClose={closeShare} />;
+
+  // Admin prompt editor overlay (rendered only when an effect is being edited).
+  const promptModal =
+    isAdmin && editingEffectId !== null ? (
+      <PromptEditModal
+        effectId={editingEffectId}
+        onClose={() => setEditingEffectId(null)}
+      />
+    ) : null;
 
   if (layout === "monitor") {
     // Monitor: [left options] [ center: original then each result stacked ] [right options]
@@ -324,6 +364,7 @@ export function StudioView({
         <aside className="studio__side studio__side--right">{characters}</aside>
 
         {shareModal}
+        {promptModal}
       </section>
     );
   }
@@ -364,6 +405,7 @@ export function StudioView({
       {actions}
 
       {shareModal}
+      {promptModal}
     </section>
   );
 }

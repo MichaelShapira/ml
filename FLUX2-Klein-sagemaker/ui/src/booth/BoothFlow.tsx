@@ -328,6 +328,7 @@ export function BoothFlow({ isAuthenticated, isAdmin = false }: BoothFlowProps) 
           onSelect={(effectId, slot) => send({ type: "SELECT", effectId, slot })}
           onMerge={() => send({ type: "MERGE" })}
           onNewSession={() => send({ type: "NEW_SESSION" })}
+          isAdmin={isAdmin}
         />
       );
     }

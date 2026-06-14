@@ -266,13 +266,54 @@ export function findEffect(effectId: string): EffectOption | undefined {
   return EFFECTS_BY_ID.get(effectId);
 }
 
-/** Resolve an effect id to its prompt, rejecting unknown ids. */
-export function getPromptForEffect(effectId: string): string {
+/**
+ * Admin-set prompt overrides, keyed by effect id. Populated at app startup from
+ * the Schedule_Store (see `api/prompts.ts` → {@link applyPromptOverrides}) and
+ * holds ONLY effects an admin has explicitly customized (`isCustom` rows). When
+ * an effect has no override here, {@link getPromptForEffect} falls back to the
+ * catalog default below — so changing a default in this file is always honored
+ * and never shadowed by a stale seed in DynamoDB.
+ */
+let promptOverrides: ReadonlyMap<string, string> = new Map();
+
+/**
+ * Replace the in-memory admin prompt-override registry. Called once after the
+ * SPA loads the effect prompts from DynamoDB, and again after an admin saves or
+ * restores a prompt, so the very next generation uses the new value.
+ */
+export function applyPromptOverrides(overrides: ReadonlyMap<string, string>): void {
+  promptOverrides = new Map(overrides);
+}
+
+/** The current admin prompt overrides (read-only view, for the admin UI). */
+export function getPromptOverrides(): ReadonlyMap<string, string> {
+  return promptOverrides;
+}
+
+/**
+ * The built-in catalog default prompt for an effect (ignores any admin
+ * override). This is the single source of truth for "restore to default" and
+ * for the booth fallback. Rejects unknown ids.
+ */
+export function getDefaultPromptForEffect(effectId: string): string {
   const effect = EFFECTS_BY_ID.get(effectId);
   if (effect === undefined) {
     throw new UnknownEffectError(effectId);
   }
   return effect.prompt;
+}
+
+/**
+ * Resolve an effect id to its effective prompt, rejecting unknown ids. Uses the
+ * admin override when one is set (see {@link applyPromptOverrides}); otherwise
+ * the catalog default.
+ */
+export function getPromptForEffect(effectId: string): string {
+  const effect = EFFECTS_BY_ID.get(effectId);
+  if (effect === undefined) {
+    throw new UnknownEffectError(effectId);
+  }
+  return promptOverrides.get(effectId) ?? effect.prompt;
 }
 
 /**

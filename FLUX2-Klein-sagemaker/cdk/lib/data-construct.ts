@@ -23,6 +23,14 @@ export const INPUTS_PREFIX = "flux2-klein-inputs/";
 export const OUTPUTS_PREFIX = "flux2-klein-outputs/";
 export const FAILURES_PREFIX = "flux2-klein-failures/";
 
+/**
+ * DynamoDB partition key under which the per-effect prompt overrides live in
+ * the Schedule_Store (single-table design). Mirrors `PROMPT_OVERRIDE_PK` in the
+ * SPA's `ui/src/api/prompts.ts`. Standard users get a read-only grant scoped to
+ * this partition; the seed custom resource and admins write here.
+ */
+export const PROMPT_OVERRIDE_PK = "PROMPT#OVERRIDE";
+
 export interface DataConstructProps {
   /**
    * The name of the managed SageMaker endpoint. Used to derive the endpoint ARN
@@ -216,6 +224,22 @@ export class DataConstruct extends Construct {
         conditions: {
           StringLike: {
             "s3:prefix": [`${OUTPUTS_PREFIX}*`, `${FAILURES_PREFIX}*`],
+          },
+        },
+      }),
+      // Read-only access to the per-effect prompt overrides, scoped (via the
+      // DynamoDB leading-key condition) to ONLY the prompt partition so a
+      // standard user can pick up admin-customized prompts but cannot read or
+      // touch Working_Hours / managed-config items. Admins get full table
+      // access through adminExtraStatements.
+      new iam.PolicyStatement({
+        sid: "ReadEffectPrompts",
+        effect: iam.Effect.ALLOW,
+        actions: ["dynamodb:Query", "dynamodb:GetItem"],
+        resources: [this.scheduleTable.tableArn],
+        conditions: {
+          "ForAllValues:StringEquals": {
+            "dynamodb:LeadingKeys": [PROMPT_OVERRIDE_PK],
           },
         },
       }),

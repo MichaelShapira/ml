@@ -20,6 +20,7 @@ import { UiDeploymentConstruct } from "./ui-deployment-construct";
 import { ShareConstruct } from "./share-construct";
 import { IoBucketCorsConstruct } from "./io-bucket-cors-construct";
 import { InvokeConstruct } from "./invoke-construct";
+import { PromptSeedConstruct } from "./prompt-seed-construct";
 import { CostAllocationTagConstruct } from "./cost-allocation-tag-construct";
 
 /** Default SageMaker endpoint configuration name the admin/scheduler `CreateEndpoint` uses. */
@@ -261,6 +262,15 @@ export class PhotoBoothStack extends Stack {
       ...(initialUserTemporaryPassword
         ? { temporaryPassword: initialUserTemporaryPassword }
         : {}),
+    });
+
+    // -------------------------------------------------------------------------
+    // 5b. Seed the initial per-effect prompts into the Schedule_Store so admins
+    //     can edit them in the SPA. Idempotent: existing (admin-edited) rows are
+    //     preserved across re-deploys.
+    // -------------------------------------------------------------------------
+    new PromptSeedConstruct(this, "PromptSeed", {
+      scheduleTable: data.scheduleTable,
     });
 
     // -------------------------------------------------------------------------

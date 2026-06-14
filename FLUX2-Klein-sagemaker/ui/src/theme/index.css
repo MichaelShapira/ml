@@ -1022,6 +1022,48 @@ input[type="date"]:focus {
   min-width: 0;
 }
 
+/* Wrapper so the admin "Edit prompt" pencil can sit over the effect button
+   without nesting a button inside a button. */
+.studio__option-item {
+  position: relative;
+  display: block;
+}
+
+.studio__option-item .touch-button {
+  width: 100%;
+}
+
+/* Small admin-only pencil overlaid on the top-right corner of an effect button. */
+.studio__option-edit {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: var(--font-size-md);
+  line-height: 1;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.studio__option-edit:hover,
+.studio__option-edit:focus-visible {
+  background: rgba(0, 0, 0, 0.8);
+}
+
+.studio__option-edit:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* Phone: keep the thumbnail small and let a long label wrap so image + text
    always fit within the button on narrow screens. */
 .studio--mobile .studio__option-thumb {
@@ -1654,4 +1696,70 @@ input[type="date"]:focus {
 .share-modal__error {
   margin: 0;
   color: var(--color-danger);
+}
+
+/* --- Admin prompt editor modal ------------------------------------------- */
+.prompt-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-lg);
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.prompt-modal {
+  width: 100%;
+  max-width: 720px;
+  max-height: 90vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+  background: var(--color-surface, #1b1b1f);
+  color: var(--color-text, #fff);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+}
+
+.prompt-modal__title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+}
+
+.prompt-modal__hint {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  opacity: 0.8;
+}
+
+.prompt-modal__textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 180px;
+  padding: var(--space-md);
+  font-family: inherit;
+  font-size: var(--font-size-md);
+  line-height: 1.5;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-sm);
+}
+
+.prompt-modal__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+}
+
+.prompt-modal__actions-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
 }

@@ -13,12 +13,13 @@
  *   - Admin_User → a top bar with the connection indicator, Booth/Admin tabs,
  *     and Sign Out.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "./auth/useAuth";
 import { SignInScreen } from "./auth/SignInScreen";
 import { BoothFlow } from "./booth/BoothFlow";
 import { AdminTab } from "./admin/AdminTab";
 import { ConnectionIndicator, TouchButton } from "./theme";
+import { loadEffectPrompts } from "./api/prompts";
 
 type Tab = "booth" | "admin";
 
@@ -32,6 +33,18 @@ export default function App() {
     signOut,
   } = useAuth();
   const [tab, setTab] = useState<Tab>("booth");
+
+  // Load any admin-customized effect prompts once authenticated, so the booth
+  // uses the live (override) prompt for every generation. Best-effort: on
+  // failure the booth falls back to the catalog defaults baked into the build.
+  useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+    void loadEffectPrompts().catch(() => {
+      /* fall back to catalog defaults */
+    });
+  }, [isAuthenticated]);
 
   if (!isAuthenticated) {
     return <SignInScreen onSignIn={signIn} authError={authError} />;
