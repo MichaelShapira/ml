@@ -366,24 +366,40 @@ aws logs tail <log-group> --since 15m | grep -iA8 "reconcile decision"
 The capture phase has TWO layouts driven by `ui/src/booth/useLayoutMode.ts`
 (breakpoint `MONITOR_MIN_WIDTH_PX = 820`):
 - **monitor** (large portrait screen): background options stacked on the LEFT,
-  character options on the RIGHT, original photo centered, generated image
-  directly BELOW it.
-- **mobile** (phone): image area on top with an `ImageCarousel` (Original /
-  Generated tabs), option groups stacked BELOW. The generated image replaces
-  the original in-place; a new generation replaces the previous one.
+  character options on the RIGHT, original photo centered, and each generated
+  image stacked directly BELOW it (background, then character, then merged).
+- **mobile** (phone): image area on top with an `ImageCarousel` (one tab per
+  image: Original / Background / Character / Merged), option groups stacked
+  BELOW. The carousel snaps to the newest image as it lands.
+
+### Multiple results + Merge
+
+A session can now hold up to THREE generated images at once: a `background`
+result, a `person` (character/dress) result, and a `merged` image combining the
+two. Background and character effects fill DISTINCT slots and no longer overwrite
+each other; re-running the same category replaces only that slot. Once BOTH the
+background and character slots are filled, a **Merge** button appears that sends
+both generated images to the endpoint as a multi-reference edit (`submitMerge`)
+with a synthesized prompt (`buildMergePrompt`, following BFL's "image 1 / image
+2" multi-reference guidance) and writes the result to the `merged` slot.
 
 Key design points:
 - **One component, `StudioView.tsx`, renders the Effects/Loading/Result/Error
   phases together.** The pure FSM (`machine.ts`) is still the source of truth;
   `BoothFlow` maps the machine state → a `StudioPhase` (`idle|loading|result|
-  error`) + photo + generatedUrl and hands it to `StudioView`. The old
-  `EffectSelector`/`LoadingScreen`/`ResultScreen`/`ErrorScreen` were deleted.
-- **Regenerate in place:** the FSM `Result` and `Error` states now accept
-  `SELECT` (→ `Loading` with the retained `capturedPhoto`), so picking another
-  effect from the result view regenerates without a full New Session. `Result`
-  therefore carries `capturedPhoto` now (property tests 5 & 7 updated to match).
-  `BoothFlow` revokes the previous object URL before each new generation to
-  avoid leaking blobs.
+  error`) + photo + a per-slot `results` map and hands it to `StudioView`. The
+  old `EffectSelector`/`LoadingScreen`/`ResultScreen`/`ErrorScreen` were deleted.
+- **Results accumulate by slot:** `Effects`/`Loading`/`Result`/`Error` carry a
+  `GeneratedResults` record (`{ background?, person?, merged? }`); `Loading`
+  carries a `GenerationJob` (`effect` with a target slot, or `merge`) so a READY
+  poll lands the image in the right slot. A failed generation preserves the
+  results gathered so far.
+- **Regenerate in place / merge:** the FSM `Result` and `Error` states accept
+  `SELECT` (→ `Loading`, replacing only that category's slot) and `MERGE` (→
+  `Loading` with a merge job, allowed only when both source slots exist).
+  Property tests 5–8 were updated to the new state shapes.
+- `BoothFlow` tracks every generated object URL in a `Set` and revokes them all
+  on New Session / unmount to avoid leaking blobs.
 - The app shell caps width at `--portrait-max-width` (480px); a
   `@media (min-width: 820px)` rule lifts that cap so the three-column monitor
   studio has room (the studio caps + centers its own content).
