@@ -1,0 +1,12 @@
+# Staged model weights (re-create with prepare_weights.py)
+weights/
+
+# Test artifacts
+marked_output.png
+
+# Python
+__pycache__/
+*.pyc
+
+# Notebook checkpoints
+.ipynb_checkpoints/

@@ -1,0 +1,10 @@
+# SAM 3 lands in transformers 4.57.x (day-0 support). Pin to [4.57.6, 5.0):
+#  - >=4.57.6 guarantees Sam3Model / Sam3Processor and the
+#    post_process_instance_segmentation API used by inference.py.
+#  - <5.0 because the PyTorch 2.6 inference DLC ships torch 2.6, and
+#    transformers 5.x imports torch.float8_e8m0fnu which only exists on
+#    torch>=2.7 -> a 5.x install would crash at import on this DLC.
+transformers>=4.57.6,<5.0
+accelerate>=1.0.0
+pillow>=10.0.0
+numpy>=1.26.0

@@ -187,6 +187,53 @@ These are real failures hit during development. Avoid repeating them.
 - **Language codes**: Yiddish source = `yi` (faster-whisper) / `ydd_Hebr` (FLORES/NLLB);
   English = `eng_Latn`.
 
+## Per-job translation parameters (model / target language / extra prompt)
+The translate step is parameterized per job. The browser UI (and the notebook,
+if you write the same file) drops a small config object at
+`s3://<pipeline-bucket>/jobs/<base>.json`:
+```json
+{"modelId": "us.amazon.nova-2-lite-v1:0", "targetLanguage": "Hebrew", "extraPrompt": "..."}
+```
+Threading (the async `.out` is named by a SageMaker-generated UUID, so there is
+no direct filename link from the upload to the result):
+1. The UI uploads media keyed by a unique `<jobId>` (so `videos/<jobId>.ext` →
+   `audio/<jobId>.wav`), and writes `jobs/<jobId>.json` **first**.
+2. `whisper-invoke-transcribe` reads `jobs/<base>.json`, adds `"base": <base>`,
+   and forwards it as a sidecar `whisper/word-output/<uuid>.cfg.json` (next to
+   where the endpoint will drop `<uuid>.out`). The translate trigger only fires
+   on `.out`, so the `.cfg.json` is inert.
+3. `whisper-translate-subtitles` reads `<uuid>.cfg.json`; falls back to defaults
+   (English, env `MODEL_ID`, output named after the uuid) when absent — so plain
+   notebook runs without a config behave exactly as before.
+- Output is named `transcripts-en/<base>.<langslug>.srt` (+`.json`). English →
+  `en` (keeps the old `.en.srt` name); other languages get a slug of the name.
+- **Model choices** wired in the UI: Claude Opus 4.8 (`us.anthropic.claude-opus-4-8`),
+  "OpenAI 5.5" (mapped to `openai.gpt-oss-120b-1:0` — GPT-5.5 is not on Bedrock),
+  Nova Lite 1 (`us.amazon.nova-lite-v1:0`), Nova Lite 2 (`us.amazon.nova-2-lite-v1:0`).
+- **Response parsing must be model-agnostic**: gpt-oss prepends a
+  `reasoningContent` block (so scan for the first `text` block, never assume
+  `content[0]`), and some models return an array of objects rather than strings
+  (coerce each element to text). See `block_text` / `as_text` in `translate.py`.
+- IAM: the translate role's `InvokeBedrock` must list every selectable model's
+  inference-profile AND routed foundation-model ARNs (pitfall #8); the transcribe
+  role needs `GetObject` on `jobs/*` and `PutObject` on `whisper/word-output/*`.
+- Lambda sources now live in `lambdas/` (`ffmpeg.py`, `transcribe.py`,
+  `translate.py`); the notebook reads them rather than inlining strings.
+
+## Two-pass translation (subtitle quality)
+`translate.py` translates in two passes for coherence:
+1. **Story pass** — the whole transcript is translated into one flowing,
+   well-spoken narrative wrapped in `<story>…</story>` (best-effort; failures
+   fall back to no story context). Stored in the `.json` under `"story"`.
+2. **Subtitle pass** — each cue is translated with the `<story>` embedded in the
+   system prompt for context, so subtitles read as a connected narrative rather
+   than isolated fragments. The model adds bracketed clarifications for terms it
+   is certain about (e.g. `Eretz [Israel]`, `the Rambam [Maimonides]`).
+- **De-duplication**: `dedupe_cues` (pre-translation, identical Yiddish source +
+  time overlap) and `dedupe_translated` (post-translation, identical translated
+  text + time overlap) merge faster-whisper's overlapping duplicate cues.
+  Genuinely repeated speech separated by a gap is preserved.
+
 ## When extending
 - Keep the notebook the single source of truth; Lambda code is embedded there as
   strings and deployed from it.

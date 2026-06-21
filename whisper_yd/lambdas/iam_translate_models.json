@@ -1,0 +1,22 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "InvokeExtraTranslationModels",
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel"],
+      "Resource": [
+        "arn:aws:bedrock:*:346399954218:inference-profile/us.amazon.nova-lite-v1:0",
+        "arn:aws:bedrock:*:346399954218:inference-profile/us.amazon.nova-2-lite-v1:0",
+        "arn:aws:bedrock:*::foundation-model/amazon.nova-lite-v1:0",
+        "arn:aws:bedrock:*::foundation-model/amazon.nova-2-lite-v1:0"
+      ]
+    },
+    {
+      "Sid": "ReadBedrockApiKey",
+      "Effect": "Allow",
+      "Action": ["secretsmanager:GetSecretValue"],
+      "Resource": "arn:aws:secretsmanager:us-east-1:346399954218:secret:/agent-core/bedrock-long-term-key-*"
+    }
+  ]
+}
