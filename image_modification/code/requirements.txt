@@ -1,0 +1,6 @@
+# NAFNet uses only stock torch ops, so the PyTorch DLC already covers the
+# heavy lifting (torch/torchvision). We only guarantee the imaging helpers.
+# torch is intentionally NOT pinned here — never disturb the DLC's
+# CUDA-matched build.
+pillow>=10.0.0
+numpy>=1.26.0

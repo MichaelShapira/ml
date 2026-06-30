@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SAM 3D Objects — WebGPU</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #0b0b0f; color: #eaeaf0; }
+  header { padding: 12px 18px; border-bottom: 1px solid #23232b; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header p { margin: 4px 0 0; font-size: 12px; color: #9a9aa8; }
+  .wrap { display: flex; gap: 16px; padding: 16px; flex-wrap: wrap; }
+  .col { flex: 1 1 440px; min-width: 360px; }
+  .panel { background: #14141b; border: 1px solid #23232b; border-radius: 10px; padding: 12px; }
+  canvas#img { max-width: 100%; cursor: crosshair; border-radius: 8px; display: block; }
+  #viewer { width: 100%; height: 460px; background: #0d0d12; border-radius: 8px; position: relative; overflow: hidden; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  button { background: #2a2a36; color: #eaeaf0; border: 1px solid #3a3a48; border-radius: 8px; padding: 8px 12px; cursor: pointer; font-size: 13px; }
+  button.primary { background: #e8590c; border-color: #e8590c; font-weight: 600; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  label.tog { font-size: 13px; display: inline-flex; gap: 5px; align-items: center; }
+  #status { font-size: 12px; color: #9a9aa8; margin-top: 8px; min-height: 16px; white-space: pre-wrap; }
+  input[type=range] { vertical-align: middle; }
+  a { color: #ffa94d; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SAM 3D Objects — click an object, get a 3D model (WebGPU)</h1>
+  <p>Segmentation runs in your browser on the GPU (transformers.js + WebGPU). The 3D lift runs on the SageMaker endpoint. Click the object, refine with more clicks, then Generate 3D and drag to rotate.</p>
+</header>
+
+<div class="wrap">
+  <div class="col panel">
+    <div class="row">
+      <input type="file" id="file" accept="image/*" />
+      <button id="useSample">Use sample image</button>
+    </div>
+    <div class="row">
+      <canvas id="img"></canvas>
+    </div>
+    <div class="row">
+      <label class="tog"><input type="radio" name="mode" value="1" checked /> Add (foreground)</label>
+      <label class="tog"><input type="radio" name="mode" value="0" /> Remove (background)</label>
+    </div>
+    <div class="row">
+      <button id="clear">Clear points</button>
+      <button id="gen" class="primary" disabled>Generate 3D</button>
+      <label class="tog">Seed <input type="number" id="seed" value="42" min="0" max="9999" style="width:64px" /></label>
+    </div>
+    <div id="status">Loading SAM (WebGPU)…</div>
+  </div>
+
+  <div class="col panel">
+    <div id="viewer"></div>
+    <div id="status3d" style="font-size:12px;color:#9a9aa8;margin-top:8px;">The 3D result appears here — drag to rotate, scroll to zoom.</div>
+    <div class="row"><a id="dl" style="display:none">Download .ply</a></div>
+  </div>
+</div>
+
+<script type="module">
+import {
+  SamModel, AutoProcessor, RawImage, Tensor, env
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
+
+const SAMPLE_URL = 'https://raw.githubusercontent.com/facebookresearch/sam-3d-objects/main/notebook/images/shutterstock_stylish_kidsroom_1640806567/image.png';
+const MODEL_ID = 'Xenova/slimsam-77-uniform';
+
+const statusEl = document.getElementById('status');
+const status3dEl = document.getElementById('status3d');
+const canvas = document.getElementById('img');
+const ctx = canvas.getContext('2d');
+const genBtn = document.getElementById('gen');
+
+let model, processor;
+let imageRaw = null;        // RawImage of the current image
+let imageInputs = null;     // processor outputs (reshaped/original sizes)
+let imageEmbeddings = null; // cached SAM embedding for the current image
+let clicks = [];            // [{x,y,label}] in displayed-canvas pixel coords (= natural px)
+let lastMask = null;        // {data: Uint8, width, height} best mask at original size
+
+function setStatus(s) { statusEl.textContent = s; }
+
+// ---- load SAM (WebGPU, fp16; falls back to wasm if WebGPU is unavailable) ----
+(async () => {
+  const hasWebGPU = 'gpu' in navigator;
+  const device = hasWebGPU ? 'webgpu' : 'wasm';
+  const dtype = hasWebGPU ? 'fp16' : 'q8';
+  try {
+    model = await SamModel.from_pretrained(MODEL_ID, { dtype, device });
+    processor = await AutoProcessor.from_pretrained(MODEL_ID);
+    setStatus(`SAM ready on ${device.toUpperCase()}. Load an image (or use the sample) and click the object.`);
+  } catch (e) {
+    setStatus('Failed to load SAM: ' + e);
+    throw e;
+  }
+})();
+
+// ---- image loading ----
+async function loadImageFromURL(url) {
+  setStatus('Encoding image (one-time per image)…');
+  imageRaw = await RawImage.read(url);
+  // Draw at natural size into the canvas.
+  canvas.width = imageRaw.width;
+  canvas.height = imageRaw.height;
+  const cimg = imageRaw.toCanvas ? imageRaw.toCanvas() : null;
+  if (cimg) ctx.drawImage(cimg, 0, 0);
+  else {
+    const im = new Image(); im.src = url;
+    await im.decode(); ctx.drawImage(im, 0, 0, canvas.width, canvas.height);
+  }
+  clicks = []; lastMask = null; genBtn.disabled = true;
+  imageInputs = await processor(imageRaw);
+  imageEmbeddings = await model.get_image_embeddings(imageInputs);
+  setStatus('Image encoded. Click the object; click again to refine.');
+}
+
+document.getElementById('useSample').onclick = () => loadImageFromURL(SAMPLE_URL).catch(e => setStatus('' + e));
+document.getElementById('file').onchange = (e) => {
+  const f = e.target.files[0];
+  if (f) loadImageFromURL(URL.createObjectURL(f)).catch(err => setStatus('' + err));
+};
+document.getElementById('clear').onclick = () => { clicks = []; lastMask = null; genBtn.disabled = true; redraw(); setStatus('Cleared. Click the object.'); };
+
+// ---- click handling ----
+canvas.addEventListener('click', async (e) => {
+  if (!imageEmbeddings) { setStatus('Load an image first.'); return; }
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width * canvas.width;
+  const y = (e.clientY - rect.top) / rect.height * canvas.height;
+  const label = parseInt(document.querySelector('input[name=mode]:checked').value, 10);
+  clicks.push({ x, y, label });
+  await decode();
+});
+
+async function decode() {
+  setStatus('Segmenting…');
+  const reshaped = imageInputs.reshaped_input_sizes[0]; // [h, w]
+  const pts = clicks.map(c => [c.x / canvas.width * reshaped[1], c.y / canvas.height * reshaped[0]]);
+  const lbls = clicks.map(c => BigInt(c.label));
+  const input_points = new Tensor('float32', pts.flat(Infinity), [1, 1, pts.length, 2]);
+  const input_labels = new Tensor('int64', lbls, [1, 1, lbls.length]);
+
+  const { pred_masks, iou_scores } = await model({ ...imageEmbeddings, input_points, input_labels });
+  const masks = await processor.post_process_masks(pred_masks, imageInputs.original_sizes, imageInputs.reshaped_input_sizes);
+  const maskTensor = masks[0][0];           // [num_masks, H, W]
+  const [num, H, W] = maskTensor.dims;
+  const scores = iou_scores.data;
+  let best = 0; for (let i = 1; i < num; i++) if (scores[i] > scores[best]) best = i;
+
+  const md = maskTensor.data;               // length num*H*W (0/1)
+  const out = new Uint8Array(H * W);
+  const off = best * H * W;
+  for (let i = 0; i < H * W; i++) out[i] = md[off + i] ? 255 : 0;
+  lastMask = { data: out, width: W, height: H };
+  genBtn.disabled = false;
+  redraw();
+  setStatus(`Mask ready (${clicks.length} point${clicks.length > 1 ? 's' : ''}). Refine with more clicks, or Generate 3D.`);
+}
+
+function redraw() {
+  // base image
+  if (imageRaw && imageRaw.toCanvas) ctx.drawImage(imageRaw.toCanvas(), 0, 0);
+  if (lastMask) {
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const d = img.data;
+    for (let i = 0; i < lastMask.data.length; i++) {
+      if (lastMask.data[i]) {
+        d[i * 4] = Math.round(d[i * 4] * 0.5);
+        d[i * 4 + 1] = Math.round(d[i * 4 + 1] * 0.5 + 100);
+        d[i * 4 + 2] = Math.round(d[i * 4 + 2] * 0.5 + 128);
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+  for (const c of clicks) {
+    ctx.beginPath(); ctx.arc(c.x, c.y, 7, 0, Math.PI * 2);
+    ctx.fillStyle = c.label ? '#00e000' : '#ff2828';
+    ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
+  }
+}
+
+// ---- generate 3D via the Flask proxy -> SageMaker ----
+function canvasToB64(c) { return c.toDataURL('image/png').split(',')[1]; }
+
+function imageB64() {
+  const c = document.createElement('canvas'); c.width = canvas.width; c.height = canvas.height;
+  c.getContext('2d').drawImage(imageRaw.toCanvas(), 0, 0);
+  return canvasToB64(c);
+}
+function maskB64() {
+  const c = document.createElement('canvas'); c.width = lastMask.width; c.height = lastMask.height;
+  const cx = c.getContext('2d'); const id = cx.createImageData(c.width, c.height);
+  for (let i = 0; i < lastMask.data.length; i++) { const v = lastMask.data[i]; id.data[i*4]=v; id.data[i*4+1]=v; id.data[i*4+2]=v; id.data[i*4+3]=255; }
+  cx.putImageData(id, 0, 0);
+  return canvasToB64(c);
+}
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+genBtn.onclick = async () => {
+  if (!lastMask) return;
+  genBtn.disabled = true;
+  status3dEl.textContent = 'Submitting to the SageMaker endpoint…';
+  const t0 = performance.now();
+  try {
+    // Start the job (returns immediately with a job id) — avoids the tunnel's
+    // ~60s request timeout that long-held requests hit (504).
+    const startResp = await fetch(new URL('generate', document.baseURI), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imageB64(), mask: maskB64(), seed: parseInt(document.getElementById('seed').value || '42', 10) }),
+    });
+    if (!startResp.ok) throw new Error('server ' + startResp.status + ': ' + (await startResp.text()));
+    const { job_id } = await startResp.json();
+
+    // Poll for the result (short requests; tunnel-safe).
+    let r = null;
+    const deadline = Date.now() + 20 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await sleep(3000);
+      const pu = new URL('poll', document.baseURI); pu.searchParams.set('id', job_id);
+      const pr = await fetch(pu);
+      if (!pr.ok) { status3dEl.textContent = 'poll ' + pr.status + '… retrying'; continue; }
+      const j = await pr.json();
+      if (j.status === 'done') { r = j; break; }
+      if (j.status === 'error') throw new Error(j.error || 'endpoint error');
+      status3dEl.textContent = `Working on the GPU… ${Math.round((performance.now() - t0) / 1000)}s (first run also loads the model)`;
+    }
+    if (!r) throw new Error('timed out after 20 min');
+
+    const total = ((performance.now() - t0) / 1000).toFixed(0);
+    const bytes = Uint8Array.from(atob(r.ply_b64), c => c.charCodeAt(0));
+    const blob = new Blob([bytes], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const dl = document.getElementById('dl'); dl.href = url; dl.download = 'reconstruction.ply'; dl.style.display = 'inline';
+    const recon = r.timing_s && r.timing_s.reconstruct;
+    status3dEl.textContent = `${(r.num_gaussians||0).toLocaleString()} gaussians · ${recon?('GPU '+recon+'s · '):''}total ${total}s`;
+    await showSplat(url);
+  } catch (e) {
+    status3dEl.textContent = 'Generation failed: ' + e;
+  } finally {
+    genBtn.disabled = false;
+  }
+};
+
+// ---- interactive 3D Gaussian-splat viewer (orbit with mouse) ----
+let viewer = null;
+async function showSplat(url) {
+  try {
+    const GS = await import('https://esm.sh/@mkkellogg/gaussian-splats-3d@0.4.7?bundle');
+    if (viewer) { try { await viewer.dispose(); } catch (_) {} viewer = null; }
+    const root = document.getElementById('viewer'); root.innerHTML = '';
+    viewer = new GS.Viewer({
+      rootElement: root,
+      sharedMemoryForWorkers: false,   // avoids COOP/COEP header requirements
+      dynamicScene: false,
+      useBuiltInControls: true,        // OrbitControls: drag to rotate, scroll to zoom
+      cameraUp: [0, 1, 0],
+    });
+    await viewer.addSplatScene(url, { format: GS.SceneFormat.Ply, showLoadingUI: false });
+    viewer.start();
+  } catch (e) {
+    document.getElementById('status3d').textContent =
+      'In-page viewer failed (' + e + '). Use the Download .ply link and open it at https://superspl.at/editor';
+  }
+}
+</script>
+</body>
+</html>

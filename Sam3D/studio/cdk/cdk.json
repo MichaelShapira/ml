@@ -1,0 +1,18 @@
+{
+  "app": "npx ts-node --prefer-ts-exts bin/app.ts",
+  "watch": { "include": ["**"], "exclude": ["README.md", "cdk*.json", "**/*.d.ts", "node_modules", "cdk.out"] },
+  "context": {
+    "endpointName": "sam3d-objects-g6e",
+    "endpointConfigName": "sam3d-objects-g6e",
+    "ioBucketName": "",
+    "adminEmail": "admin@example.com",
+    "visitorEmail": "visitor@example.com",
+    "inputPrefix": "sam3d-inputs/",
+    "outputPrefix": "sam3d-outputs/",
+    "failurePrefix": "sam3d-failures/",
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
+    "@aws-cdk/core:checkSecretUsage": true,
+    "@aws-cdk/aws-iam:minimizePolicies": true,
+    "@aws-cdk/core:target-partitions": ["aws"]
+  }
+}

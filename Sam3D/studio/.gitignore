@@ -1,0 +1,7 @@
+node_modules/
+cdk/cdk.out/
+cdk/outputs.json
+ui/dist/
+ui/public/config.js
+*.log
+.env

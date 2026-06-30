@@ -1,0 +1,27 @@
+#!/bin/bash
+# SageMaker hosting entrypoint. SageMaker runs `docker run <image> serve`; this
+# script activates the conda env that holds the compiled SAM 3D Objects stack and
+# launches the Flask app under gunicorn on the required port 8080.
+#
+# Single worker: the model is large and single-GPU, so one resident process owns
+# the GPU. timeout=0 because a cold model load + 3D reconstruction + turntable
+# render can take minutes (the SageMaker async invocation has its own timeout).
+set -e
+
+# Make `mamba run`/conda activation available, then activate the env.
+source /opt/conda/etc/profile.d/conda.sh
+conda activate sam3d-objects
+
+MODEL_SERVER_TIMEOUT=${MODEL_SERVER_TIMEOUT:-0}
+MODEL_SERVER_WORKERS=${MODEL_SERVER_WORKERS:-1}
+
+exec gunicorn \
+    --bind 0.0.0.0:8080 \
+    --workers "${MODEL_SERVER_WORKERS}" \
+    --threads 1 \
+    --timeout "${MODEL_SERVER_TIMEOUT}" \
+    --graceful-timeout 60 \
+    --keep-alive 65 \
+    --access-logfile - \
+    --error-logfile - \
+    predictor:app

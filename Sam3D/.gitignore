@@ -1,0 +1,18 @@
+# Staged checkpoints (large, gated — never commit)
+checkpoints/
+weights/
+
+# Local artifacts
+*.ply
+*.gif
+*.mp4
+outputs/
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Secrets
+.env
+*.token

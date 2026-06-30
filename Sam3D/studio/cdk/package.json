@@ -1,0 +1,26 @@
+{
+  "name": "sam3d-studio-cdk",
+  "version": "0.1.0",
+  "bin": { "sam3d-studio": "bin/app.js" },
+  "scripts": {
+    "build": "tsc",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "aws-cdk": "^2.150.0",
+    "esbuild": "^0.21.0",
+    "ts-node": "^10.9.2",
+    "source-map-support": "^0.5.21",
+    "typescript": "~5.4.0"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.150.0",
+    "constructs": "^10.3.0",
+    "@aws-sdk/client-s3": "^3.600.0",
+    "@aws-sdk/client-sagemaker": "^3.600.0",
+    "@aws-sdk/client-sagemaker-runtime": "^3.600.0",
+    "@aws-sdk/s3-request-presigner": "^3.600.0"
+  }
+}

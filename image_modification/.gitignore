@@ -1,0 +1,10 @@
+weights/
+*.pth
+*.png
+*.jpg
+*.jpeg
+!figures/*.png
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store

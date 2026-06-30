@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SAM3D Studio</title>
+    <!-- amazon-cognito-identity-js references `global`, which doesn't exist in the
+         browser. Vite's production build shims it, but the dev runtime does not —
+         without this the Cognito pool throws at import time and the app renders
+         blank. Harmless in production. -->
+    <script>window.global ||= window;</script>
+    <!-- Runtime config written by deploy.sh from CDK outputs. Safe to 404 in dev
+         (falls back to Vite env vars). -->
+    <script src="/config.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
