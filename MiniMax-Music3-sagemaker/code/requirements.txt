@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------------------
+# Inference dependencies for MiniMax Music 3 on a SageMaker PyTorch DLC.
+#
+# DO NOT add `torch` here. PyTorch is provided by the DLC and is the ONLY
+# component compiled for the GPU architecture (g6e = NVIDIA L40S, Ada sm_89
+# -> PyTorch 2.5 DLC). A pip-installed torch would overwrite the DLC's
+# CUDA-matched build and produce "CUDA error: no kernel image is available
+# for execution on the device". Let the container own torch.
+#
+# Pins are deterministic on purpose: the SageMaker toolkit runs
+# `pip install -r requirements.txt` (no --upgrade) on every cold start, so an
+# unbounded `>=` can silently resolve a new major months later and break a
+# previously-working endpoint.
+# ---------------------------------------------------------------------------
+
+# The MiniMaxMusic3 modular pipeline is NOT in any diffusers release yet.
+# Verified 2026-08-15 by grepping the diffusers 0.39.0 wheel: zero minimax
+# files. Until huggingface/diffusers#14456 merges and ships in a release,
+# install the exact commit the model card pins. Direct archive tarball (not
+# git+): pip downloads an immutable tarball, no git clone, no branch drift,
+# and the sdist build is pure-Python (~30s). When a release wheel ships the
+# pipeline, replace this line with `diffusers==<that release>`.
+diffusers @ https://github.com/huggingface/diffusers/archive/dafe3733fcfdbf3c48915fe77be3aef65b5d6a2d.tar.gz
+
+# Version triangle, NEW GEOMETRY for this model (differs from FLUX.2's pin —
+# do not copy 4.56.2 back, it broke this endpoint's first deploy):
+#   - The diffusers PR commit above requires huggingface-hub>=1.23,<2.0.
+#   - transformers 4.x caps huggingface-hub<1.0 -> pip ResolutionImpossible,
+#     the toolkit exits, TorchServe never starts, ping health check fails.
+#   - transformers 5.15.0 accepts hub>=1.5,<2.0 AND (verified by grepping the
+#     wheel) its torch.float8_e8m0fnu references are hasattr-guarded in
+#     finegrained_fp8.py, so it no longer crashes at import on the torch-2.5
+#     DLC the way early 5.x did. Qwen3ForCausalLM present.
+transformers==5.15.0
+
+# Imported by diffusers component loading; keep the proven bounded range.
+accelerate>=1.0.0,<2.0.0
+
+# WAV encoding in predict_fn. The manylinux wheel bundles libsndfile, so no
+# system package is needed on the DLC.
+soundfile>=0.12,<0.14
+
+# Tokenizer + serialization deps, same caps as the FLUX.2 endpoint, except
+# safetensors: the diffusers PR branch requires >= 0.8.
+sentencepiece>=0.2.0
+protobuf>=4.25,<6
+safetensors>=0.8.0,<1.0

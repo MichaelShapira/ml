@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Staged model weights (~29 GB — never commit)
+weights/
+
+# Generated audio
+*.wav
+*.mp3
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Local env / creds
+.env
+.deploy_creds.sh
