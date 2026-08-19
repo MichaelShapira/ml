@@ -85,6 +85,70 @@ Rules that silently ruin output if broken:
 Response: `audio/wav` bytes in the async output location. The notebook converts to MP3 client-side
 (`soundfile` bundles the codec; no ffmpeg).
 
+## Prompting quick start (for first-time users)
+
+You control the model with exactly two texts: **lyrics** (what gets sung, and the song's shape) and
+**prompt** (how it sounds). Think of the lyrics as the script and the prompt as the producer's notes.
+
+### Section tags — shaping the song
+
+Tags are bracketed markers you put inside the lyrics, **each on its own line**, to tell the model
+what part of the song comes next:
+
+| Tag | What it does |
+|---|---|
+| `[Intro]` | Opening — usually instrumental; put `(instrumental)` on the next line |
+| `[Verse]` | A sung verse; the lines after it are the words for that verse |
+| `[Pre-Chorus]` | Short build-up between verse and chorus |
+| `[Chorus]` | The hook — the model makes it bigger and more memorable, and repeats its melody when the tag reappears |
+| `[Post-Chorus]` | Tail after the chorus |
+| `[Bridge]` | Contrasting section, usually once, before the final chorus |
+| `[Instrumental]` / `[Solo]` | No singing; the arrangement (or a lead instrument) takes over |
+| `[Outro]` | The ending — fade or resolution |
+
+Minimal example:
+
+```
+[Verse]
+Walking down the empty street at midnight
+Streetlights flicker like a broken dream
+[Chorus]
+And I keep on walking
+Till the morning finds me
+[Outro]
+(instrumental)
+```
+
+**The one rule that silently breaks songs:** never put lyric words on the same line as a tag.
+`[Verse] Walking down the street` keeps the tag and *silently drops the words*. Tag on one line,
+words on the next.
+
+### The prompt — steering the style
+
+The prompt is the strongest control. The difference between generic and great output is
+specificity — name things instead of describing feelings:
+
+- **Genre + tempo + key**: "acoustic pop at 96 BPM in C major", "symphonic metal ballad, slow 6/8"
+- **Instruments**: "fingerpicked guitar, soft piano, brushed drums" beats "nice instruments"
+- **Vocals**: gender, character, delivery — "soft female lead, close and breathy, light harmonies
+  in the chorus". For a **duet**, say who sings what: "male baritone leads the verses, female
+  soprano answers, they join in harmony on the chorus"
+- **Production**: "intimate bedroom production, tape saturation" vs "wide cinematic mix, hall reverb"
+- **Instrumental music**: say "fully instrumental, no vocals" in the prompt and keep the lyrics
+  minimal (`[Intro]` + `(instrumental)`)
+
+A one-line prompt like *"A melancholic lo-fi hip-hop track with a mellow piano riff at 85 BPM"*
+already works well. For full-song control, grow it into three labeled parts — **Global Metadata**
+(genre/tempo/key/mood), **Vocal Details**, and **Arrangement** (what enters and exits, section by
+section) — see the payloads in the notebook for complete examples.
+
+### Workflow tips
+
+- **Audition cheap**: generate 15–30 s first to judge the style, then render the full length.
+- **Same seed = identical audio.** Like the style but want another take? Change only the seed.
+  Wrong instruments or vocal balance? Fix the prompt, not the seed.
+- Don't paste copyrighted lyrics — write your own (see License below).
+
 ## Latency & cost expectations
 
 - Cold start: ~8–12 min (pip install + mirror 29 GB from S3 + load 22 GB to GPU).
