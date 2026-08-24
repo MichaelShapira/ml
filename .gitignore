@@ -1,0 +1,18 @@
+# Never commit private keys or credentials (real .pem keys live in .h3-tmp/)
+.h3-tmp/
+*.pem
+!**/site-packages/**/cacert.pem
+.deploy_creds.sh
+.env
+
+# macOS / editor noise
+.DS_Store
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# local sync artifact for copying the project to a notebook instance; a stale
+# duplicate of the sources, never the source of truth
+videoCreation/minimax-h3-sync.zip
