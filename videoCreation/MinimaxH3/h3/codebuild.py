@@ -6,7 +6,7 @@ Why this exists: SageMaker **Studio** has no Docker daemon unless the domain set
 poor place to extract a ~30 GB image. A SageMaker **notebook instance** has Docker
 but puts its data-root on the fixed ~100 GB root volume, which usually has 10-20 GB
 free. So on both of the obvious places to run the notebook, a local `docker build`
-of `lmsysorg/sglang:dev` fails.
+on top of the SGLang DLC fails.
 
 CodeBuild sidesteps all of it: 128 GB of build disk, Docker preinstalled, and the
 image is pushed straight to ECR.
@@ -36,6 +36,10 @@ __all__ = ["ensure_codebuild_role", "build_image", "BUILDSPEC"]
 DEFAULT_COMPUTE = "BUILD_GENERAL1_LARGE"
 DEFAULT_IMAGE = "aws/codebuild/standard:7.0"
 
+# AWS Deep Learning Containers registry: one account id, replicated per region.
+DLC_ACCOUNT = "763104351884"
+DLC_SGLANG_TAG = "0.5.17-gpu-py312-cu130-ubuntu24.04-sagemaker"
+
 BUILDSPEC = r"""
 version: 0.2
 phases:
@@ -44,12 +48,14 @@ phases:
       - echo "disk before build:" && df -h /
       - aws --version && docker --version
       - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
+      # The SGLang DLC base lives in AWS's DLC registry, which needs its own login.
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$DLC_REGISTRY"
       - aws ecr describe-repositories --repository-names "$ECR_REPO" >/dev/null 2>&1 || aws ecr create-repository --repository-name "$ECR_REPO" --image-scanning-configuration scanOnPush=true --encryption-configuration encryptionType=AES256
       - docker pull --platform linux/amd64 "$SGLANG_IMAGE"
   build:
     commands:
       - echo "building $IMAGE_URI"
-      - docker build --platform linux/amd64 --build-arg "SGLANG_IMAGE=$SGLANG_IMAGE" --build-arg "SGLANG_COMMIT=$SGLANG_COMMIT" -t "$IMAGE_URI" .
+      - docker build --platform linux/amd64 --build-arg "SGLANG_IMAGE=$SGLANG_IMAGE" -t "$IMAGE_URI" .
       - echo "disk after build:" && df -h /
   post_build:
     commands:
@@ -125,6 +131,16 @@ def ensure_codebuild_role(
                 "Resource": f"arn:aws:ecr:{region}:{account_id}:repository/{ecr_repo}",
             },
             {
+                # Pull the SGLang DLC base image from AWS's DLC registry.
+                "Sid": "PullDlcBaseImage",
+                "Effect": "Allow",
+                "Action": [
+                    "ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage",
+                    "ecr:GetDownloadUrlForLayer",
+                ],
+                "Resource": f"arn:aws:ecr:{region}:{DLC_ACCOUNT}:repository/sglang",
+            },
+            {
                 # No resource-level permissions exist for these two.
                 "Sid": "EcrAuthAndDescribe",
                 "Effect": "Allow",
@@ -167,14 +183,17 @@ def build_image(
     role_name: str = "minimax-h3-codebuild-role",
     source_key_prefix: str = "minimax-h3/build",
     compute_type: str = DEFAULT_COMPUTE,
-    sglang_image: str = "lmsysorg/sglang:dev",
-    sglang_commit: str = "d257b58e67193780ff8a59ab54b48219b9dc28d2",
+    sglang_image: str | None = None,
     timeout_minutes: int = 120,
     follow: bool = True,
 ) -> dict[str, Any]:
     """Zip `container/`, run the build in CodeBuild, stream logs, return the image URI."""
     registry = f"{account_id}.dkr.ecr.{region}.amazonaws.com"
     image_uri = f"{registry}/{ecr_repo}:{image_tag}"
+    # Default base: the region-local SageMaker SGLang DLC.
+    dlc_registry = f"{DLC_ACCOUNT}.dkr.ecr.{region}.amazonaws.com"
+    if sglang_image is None:
+        sglang_image = f"{dlc_registry}/sglang:{DLC_SGLANG_TAG}"
 
     role_arn = ensure_codebuild_role(
         iam, role_name=role_name, account_id=account_id, region=region, bucket=bucket,
@@ -188,10 +207,10 @@ def build_image(
 
     env_vars = [
         {"name": "REGISTRY", "value": registry},
+        {"name": "DLC_REGISTRY", "value": dlc_registry},
         {"name": "ECR_REPO", "value": ecr_repo},
         {"name": "IMAGE_URI", "value": image_uri},
         {"name": "SGLANG_IMAGE", "value": sglang_image},
-        {"name": "SGLANG_COMMIT", "value": sglang_commit},
     ]
     project_cfg = {
         "name": project_name,

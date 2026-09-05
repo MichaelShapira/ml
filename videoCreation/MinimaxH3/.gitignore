@@ -1,5 +1,6 @@
 outputs/
 demo_inputs/
+demo-inputs/
 container/.image_uri
 __pycache__/
 *.pyc

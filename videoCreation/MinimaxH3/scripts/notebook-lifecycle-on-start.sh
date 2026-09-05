@@ -14,7 +14,7 @@
 #                                stop/start.
 #
 # Docker's data-root defaults to /var/lib/docker, which is on the ROOT volume.
-# The MiniMax-H3 base image (lmsysorg/sglang:dev) is 13.7 GB compressed and
+# The MiniMax-H3 base image (the SageMaker SGLang DLC) is ~14 GB compressed and
 # ~30 GB extracted, so `docker build` fails with "no space left on device" no
 # matter how large you made VolumeSizeInGB. Raising VolumeSizeInGB does not help,
 # because it does not touch the root volume.

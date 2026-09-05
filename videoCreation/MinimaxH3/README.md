@@ -11,6 +11,40 @@ separate audio pass. Output is 24 fps, 4-15 s, 768-pixel short edge.
 
 Start with **`MiniMax-H3-SageMaker.ipynb`**.
 
+## 2026-09: rebased onto the AWS SageMaker SGLang DLC
+
+The serving image originally had to build on `lmsysorg/sglang:dev` and pin a pre-release `main`
+commit, because MiniMax-H3 was not in any tagged SGLang release at the time. That is no longer true:
+SGLang **v0.5.17** is the first tagged release carrying the pipeline, and the
+[2026/08/08 AWS DLC release](https://github.com/aws/deep-learning-containers/blob/main/README.md)
+(`763104351884.dkr.ecr.<region>.amazonaws.com/sglang:0.5.17-gpu-py312-cu130-ubuntu24.04-sagemaker`)
+ships it with the `[diffusion]` extra, CVE-patched by AWS. The project now builds on that DLC.
+
+What changed, and why it is strictly better:
+
+- **`container/Dockerfile`** — the whole checkout-and-reinstall dance is gone: no `git checkout` of
+  a pinned commit inside the image, no editable `pip install -e "python[diffusion]"`, no flashinfer
+  companion-wheel realignment (a tagged release ships matched wheels by construction). What remains
+  is ffmpeg, boto3 and the serving shim on top of the DLC. The build-time assertion that
+  `sglang.multimodal_gen...minimax_h3` imports is kept — a missing pipeline still fails the build,
+  not the deploy. The DLC's own single-model entrypoint at `/usr/bin/serve` is overwritten with the
+  H3 shim so `docker run <image> serve` always lands on it.
+- **`container/build_and_push.sh` and `h3/codebuild.py`** — the base now comes from AWS's DLC
+  registry (account `763104351884`), which needs its own `docker login`; both build paths do it, and
+  the CodeBuild role gained a `PullDlcBaseImage` statement scoped to that registry's `sglang`
+  repository. The `SGLANG_COMMIT` build argument is gone. The floating
+  `0.5.17-...-sagemaker` tag tracks AWS's patch releases, so a rebuild picks up security fixes
+  automatically.
+- **Reproducibility note** — the previously pinned commit (`d257b58`) is an ancestor of the
+  `v0.5.17` tag (verified: 0 commits behind), so nothing the endpoint ran before was lost in the
+  move; the tag adds 24 commits on top.
+
+Verified end to end: rebuilt in CodeBuild, redeployed, and re-ran the demos against the new image.
+
+**Sample generated after the change** — the section 9d demo (`i2va`, a user photo as the first
+frame, static camera, a dachshund squeezing toothpaste onto a brush and brushing his own teeth):
+[samples/dog.mp4](samples/dog.mp4)
+
 ## Two properties of the notebook worth knowing up front
 
 **Run cell 1 and cell 2, then jump to any section.** Every later cell depends on the bootstrap cell
@@ -36,7 +70,7 @@ goes S3 → memory → API, never to disk.
 ```
 MiniMax-H3-SageMaker.ipynb   the notebook: stage -> build -> deploy -> 12 demos -> teardown
 container/
-  Dockerfile                 lmsysorg/sglang:dev + pinned main commit + [diffusion] extra
+  Dockerfile                 SageMaker SGLang 0.5.17 DLC + ffmpeg + the serving shim
   serve.py                   SageMaker shim: /ping, /invocations, two SGLang backends
   serve                      container entrypoint (SageMaker runs `docker run <image> serve`)
   build_and_push.sh          build for linux/amd64 and push to ECR
@@ -51,6 +85,8 @@ h3/
   codebuild.py               build the image in CodeBuild (no local Docker needed)
   state.py                   S3-backed cross-cell state (what makes cells resumable)
   media.py                   optional local ffmpeg helpers (the endpoint does this by default)
+samples/
+  dog.mp4                    section 9d output generated on the DLC-based image
 ```
 
 ### `HF_TOKEN`
@@ -91,9 +127,14 @@ published, measured multi-GPU topologies for H3. The diffusers integration exist
 Diffusers blocks) but is on an unmerged branch and has no context-parallel serving path — its
 recipes target single- and dual-GPU offload. `serve.py` shells out to `sglang serve` and proxies.
 
-**MiniMax-H3 is not in any tagged SGLang release.** Verified absent from `v0.5.16`, present in
-`main`. The Dockerfile pins a `main` commit and *asserts at build time* that
-`sglang.multimodal_gen...minimax_h3` imports — a missing pipeline should fail a build, not a deploy.
+**Built on the AWS SageMaker SGLang DLC.** SGLang `v0.5.17` is the first tagged release that
+carries the MiniMax-H3 pipeline (verified absent from `v0.5.16`, present in `v0.5.17`), and the
+[2026/08/08 DLC release](https://github.com/aws/deep-learning-containers/blob/main/README.md)
+(`763104351884.dkr.ecr.<region>.amazonaws.com/sglang:0.5.17-gpu-py312-cu130-ubuntu24.04-sagemaker`)
+ships it with the `[diffusion]` extra, CVE-patched by AWS. An earlier revision pinned a pre-release
+`main` commit on top of `lmsysorg/sglang:dev`; that is gone. The Dockerfile still *asserts at build
+time* that `sglang.multimodal_gen...minimax_h3` imports — a missing pipeline should fail a build,
+not a deploy.
 
 **`tp=4, ulysses=1` by default, not the documented speed recipe.** The cookbook's measured 4x H100
 placements: `tp2+ulysses2` 13.25 s / 66.04 GB, FSDP+`ulysses4` 13.36 s / 57.01 GB, `tp4+ulysses1`
@@ -202,7 +243,7 @@ A notebook instance has two volumes:
 | `/` | **~100 GB, fixed, not configurable** — mostly consumed by the bundled conda envs, typically 10-20 GB free | no |
 | `/home/ec2-user/SageMaker` | `VolumeSizeInGB` (5 GB default, up to 16 TB) | yes |
 
-Docker's data-root is `/var/lib/docker`, on the **root** volume. `lmsysorg/sglang:dev` is 13.7 GB
+Docker's data-root is `/var/lib/docker`, on the **root** volume. The SGLang DLC base image is ~14 GB
 compressed and **~30 GB extracted**, so `docker build` dies with `no space left on device` regardless
 of how large you set `VolumeSizeInGB`.
 
@@ -261,7 +302,7 @@ Worth stating, since three sibling projects here (`LongCat-Image-sagemaker`, `FL
 
 | Convention here | This project | Why |
 |---|---|---|
-| PyTorch/HF DLC + `source_dir` + `inference.py` | BYOC image | The pipeline is only in SGLang `main`, and the DLC has no context-parallel serving path. Multi-GPU Ulysses/TP is the whole point on a 33 B DiT + 32 B encoder. |
+| PyTorch/HF DLC + `source_dir` + `inference.py` | BYOC image on the SGLang DLC | The SGLang 0.5.17 DLC carries the pipeline, but its entrypoint serves one model the OpenAI way — H3 needs two SGLang backends on split GPUs behind `/ping` + `/invocations`. Multi-GPU Ulysses/TP is the whole point on a 33 B DiT + 32 B encoder. |
 | `<model>-inputs/`, `<model>-outputs/`, `<model>-failures/` at bucket root | nested `minimax-h3/{weights,io/{requests,responses,failures,generated,demo-inputs}}` | The IAM policy conditions on `s3:prefix`, so one nested namespace per project keeps the statements short and makes the role trivially auditable. |
 | Auto-scale to zero when idle | delete and redeploy | Scaling back up re-downloads 288 GB and reloads two models — a 20-40 minute cold start. For demo use the cost is identical and the failure modes are fewer. |
 
