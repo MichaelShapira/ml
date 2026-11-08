@@ -169,7 +169,7 @@ describe("EndpointPanel (managed-config list + picker)", () => {
     });
     fireEvent.click(screen.getByTestId("add-config-button"));
 
-    await waitFor(() => expect(addConfig).toHaveBeenCalledWith("cfg-a"));
+    await waitFor(() => expect(addConfig).toHaveBeenCalledWith("cfg-a", "us-east-1"));
   });
 
   it("rejects adding a config that is not an existing account config", async () => {
@@ -190,8 +190,8 @@ describe("EndpointPanel (managed-config list + picker)", () => {
 
   it("lists managed configs, badges the current, and offers per-row actions", async () => {
     listManagedConfigsWithStatus.mockResolvedValue([
-      { name: "cfg-a", status: EndpointStatus.NOT_DEPLOYED, isCurrent: true },
-      { name: "cfg-b", status: EndpointStatus.NOT_DEPLOYED, isCurrent: false },
+      { name: "cfg-a", region: "us-east-1", id: "cfg-a", status: EndpointStatus.NOT_DEPLOYED, isCurrent: true },
+      { name: "cfg-b", region: "us-east-1", id: "cfg-b", status: EndpointStatus.NOT_DEPLOYED, isCurrent: false },
     ]);
     render(<EndpointPanel />);
 
@@ -209,20 +209,20 @@ describe("EndpointPanel (managed-config list + picker)", () => {
 
   it("makes another config current (only one current at a time)", async () => {
     listManagedConfigsWithStatus.mockResolvedValue([
-      { name: "cfg-a", status: EndpointStatus.NOT_DEPLOYED, isCurrent: true },
-      { name: "cfg-b", status: EndpointStatus.NOT_DEPLOYED, isCurrent: false },
+      { name: "cfg-a", region: "us-east-1", id: "cfg-a", status: EndpointStatus.NOT_DEPLOYED, isCurrent: true },
+      { name: "cfg-b", region: "us-east-1", id: "cfg-b", status: EndpointStatus.NOT_DEPLOYED, isCurrent: false },
     ]);
     render(<EndpointPanel />);
 
     fireEvent.click(await screen.findByTestId("make-current-cfg-b"));
-    await waitFor(() => expect(makeConfigCurrent).toHaveBeenCalledWith("cfg-b"));
+    await waitFor(() => expect(makeConfigCurrent).toHaveBeenCalledWith("cfg-b", "us-east-1"));
     expect(await screen.findByTestId("current-badge-cfg-b")).toBeInTheDocument();
     expect(screen.queryByTestId("current-badge-cfg-a")).not.toBeInTheDocument();
   });
 
   it("requires an explicit confirm before stopping a deployed config's endpoint", async () => {
     listManagedConfigsWithStatus.mockResolvedValue([
-      { name: "cfg-a", status: EndpointStatus.IN_SERVICE, isCurrent: true },
+      { name: "cfg-a", region: "us-east-1", id: "cfg-a", status: EndpointStatus.IN_SERVICE, isCurrent: true },
     ]);
     render(<EndpointPanel />);
 
@@ -231,17 +231,17 @@ describe("EndpointPanel (managed-config list + picker)", () => {
     expect(screen.getByTestId("stop-confirm-cfg-a")).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("confirm-stop-cfg-a"));
-    await waitFor(() => expect(stopEndpoint).toHaveBeenCalledWith("cfg-a"));
+    await waitFor(() => expect(stopEndpoint).toHaveBeenCalledWith("cfg-a", "us-east-1"));
   });
 
   it("removes a config from the managed list", async () => {
     listManagedConfigsWithStatus.mockResolvedValue([
-      { name: "cfg-a", status: EndpointStatus.NOT_DEPLOYED, isCurrent: true },
+      { name: "cfg-a", region: "us-east-1", id: "cfg-a", status: EndpointStatus.NOT_DEPLOYED, isCurrent: true },
     ]);
     render(<EndpointPanel />);
 
     fireEvent.click(await screen.findByTestId("remove-cfg-a"));
-    await waitFor(() => expect(removeConfig).toHaveBeenCalledWith("cfg-a"));
+    await waitFor(() => expect(removeConfig).toHaveBeenCalledWith("cfg-a", "us-east-1"));
   });
 });
 

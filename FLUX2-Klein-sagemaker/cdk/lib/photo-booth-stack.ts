@@ -23,6 +23,7 @@ import { InvokeConstruct } from "./invoke-construct";
 import { PromptSeedConstruct } from "./prompt-seed-construct";
 import { CostAllocationTagConstruct } from "./cost-allocation-tag-construct";
 import { Flux3Construct, FLUX3_HF_TOKEN_SECRET_NAME, FLUX3_PREFIX } from "./flux3-construct";
+import { resolveEndpointRegions } from "./endpoint-regions";
 
 /** Default SageMaker endpoint configuration name the admin/scheduler `CreateEndpoint` uses. */
 const DEFAULT_ENDPOINT_CONFIG_NAME = "flux2-klein-9b-g6e2-config";
@@ -172,6 +173,12 @@ export class PhotoBoothStack extends Stack {
       ...(existingIoBucketName ? { existingIoBucketName } : {}),
     });
 
+    // Regions the admin may pick endpoints from: this stack's region plus the
+    // `endpointRegions` context (deploy.sh --endpoint-regions), each with its
+    // own async I/O bucket.
+    const endpointRegions = resolveEndpointRegions(this, data.ioBucket.bucketName);
+    const extraRegions = endpointRegions.filter((r) => !r.home);
+
     // -------------------------------------------------------------------------
     // 2. Auth — Cognito + Identity Pool + Authenticated_Role/Admin_Role.
     //    Scoped with the data layer's bucket + table. (Share-bucket access is
@@ -181,6 +188,7 @@ export class PhotoBoothStack extends Stack {
       ioBucket: data.ioBucket,
       scheduleTable: data.scheduleTable,
       endpointName: endpointName.valueAsString,
+      extraRegions,
     });
 
     // -------------------------------------------------------------------------
@@ -201,6 +209,15 @@ export class PhotoBoothStack extends Stack {
       ioBucketName: data.ioBucket.bucketName,
       distributionDomainName: hosting.distributionDomainName,
     });
+    // Same CORS on each extra endpoint region's bucket: the browser uploads
+    // requests to, and reads results from, the current endpoint's region.
+    for (const extra of extraRegions) {
+      new IoBucketCorsConstruct(this, `IoBucketCors-${extra.region}`, {
+        ioBucketName: extra.ioBucketName,
+        bucketRegion: extra.region,
+        distributionDomainName: hosting.distributionDomainName,
+      });
+    }
 
     // -------------------------------------------------------------------------
     // 3b-ii. Share_Bucket — short-lived storage for the "Share with me" QR
@@ -232,6 +249,7 @@ export class PhotoBoothStack extends Stack {
     // -------------------------------------------------------------------------
     const invoke = new InvokeConstruct(this, "Invoke", {
       data,
+      extraRegions,
       allowedOrigins: [
         `https://${hosting.distributionDomainName}`,
         "http://localhost:5173",
@@ -246,6 +264,7 @@ export class PhotoBoothStack extends Stack {
     // -------------------------------------------------------------------------
     new SchedulerConstruct(this, "Scheduler", {
       data,
+      extraRegions,
       endpointConfigName: endpointConfigName.valueAsString,
       timezone: schedulerTimezone.valueAsString,
     });
@@ -280,7 +299,7 @@ export class PhotoBoothStack extends Stack {
     //     Model + EndpointConfig (FluxAiBoot-flux3-g7e) after this stack, and
     //     the admin starts the endpoint from the booth like any other config.
     // -------------------------------------------------------------------------
-    const flux3 = new Flux3Construct(this, "Flux3", { ioBucket: data.ioBucket });
+    const flux3 = new Flux3Construct(this, "Flux3", { ioBucket: data.ioBucket, extraRegions });
 
     // -------------------------------------------------------------------------
     // 6. UI deployment — push the built SPA + injected runtime config into the
@@ -304,6 +323,7 @@ export class PhotoBoothStack extends Stack {
         shareSignerUrl: share.signerUrl.url,
         timezone: schedulerTimezone.valueAsString,
         invokeFunctionUrl: invoke.functionUrl.url,
+        endpointRegions: extraRegions.map((r) => ({ region: r.region, ioBucket: r.ioBucketName })),
       },
     });
 
@@ -374,6 +394,10 @@ export class PhotoBoothStack extends Stack {
     new CfnOutput(this, "Region", {
       description: "AWS region the stack is deployed to.",
       value: this.region,
+    });
+    new CfnOutput(this, "EndpointRegions", {
+      description: "Regions the admin may pick endpoints from, each with its I/O bucket (region=bucket).",
+      value: endpointRegions.map((r) => `${r.region}=${r.ioBucketName}`).join(","),
     });
     new CfnOutput(this, "EndpointNameOutput", {
       description: "Managed FLUX.2 async SageMaker endpoint name.",

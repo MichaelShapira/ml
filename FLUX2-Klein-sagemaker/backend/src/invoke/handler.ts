@@ -17,8 +17,15 @@
  *   - The Lambda's own role holds the single least-privilege permission
  *     `sagemaker:InvokeEndpointAsync` on the configured endpoint ARN.
  *   - The handler validates that the requested `inputLocation` points at the
- *     configured I/O bucket + inputs prefix, so a caller cannot coerce the
- *     endpoint into reading an arbitrary S3 object (defense in depth).
+ *     I/O bucket of the current endpoint's region + the inputs prefix, so a
+ *     caller cannot coerce the endpoint into reading an arbitrary S3 object
+ *     (defense in depth).
+ *
+ * Regions: the current-config pointer carries the config's region (absent =
+ * this Lambda's region). Each allowed endpoint region and its I/O bucket come
+ * from `ENDPOINT_REGIONS` (JSON `{ "<region>": "<bucket>" }`, written by CDK);
+ * the home region uses `IO_BUCKET`. A pointer naming any other region is
+ * refused, so the proxy only ever invokes endpoints the stack was set up for.
  *
  * AWS SDK for JavaScript v3 (`@aws-sdk/client-sagemaker-runtime`).
  */
@@ -41,10 +48,29 @@ export const INPUTS_PREFIX = "flux2-klein-inputs/";
 export interface InvokeConfig {
   /** Fallback endpoint to invoke when no current config is set in DynamoDB. */
   endpointName: string;
-  /** The I/O bucket the input location must reside in (defense in depth). */
+  /** The home region's I/O bucket (defense in depth). */
   ioBucket: string;
   /** Schedule_Store table holding the current-config pointer (optional). */
   scheduleTable: string;
+  /** This Lambda's (the stack's) region; endpoints default to it. */
+  homeRegion?: string;
+  /** Extra endpoint regions and their I/O buckets: `{ region: bucket }`. */
+  endpointRegions?: Record<string, string>;
+}
+
+/** The endpoint the proxy invokes and the region it lives in. */
+export interface InvokeTarget {
+  endpointName: string;
+  /** Region of the endpoint; `undefined` = the home region. */
+  region?: string;
+}
+
+/** Thrown when the current config names a region the stack does not allow. */
+export class UnknownRegionError extends Error {
+  constructor(region: string) {
+    super(`endpoint region ${region} is not one of the booth's endpoint regions`);
+    this.name = "UnknownRegionError";
+  }
 }
 
 /** Request body the browser sends to the Function URL. */
@@ -83,6 +109,8 @@ export interface FunctionUrlResult {
 export interface HandlerDeps {
   /** Injected SageMaker Runtime client (defaults to a real client). */
   runtime?: SageMakerRuntimeClient;
+  /** Runtime client for an endpoint region (defaults to one real client per region). */
+  runtimeFor?: (region: string) => SageMakerRuntimeClient;
   /** Injected DynamoDB client for the current-config lookup. */
   dynamodb?: DynamoDBClient;
   /** Resolved config (defaults to {@link resolveConfig} over `process.env`). */
@@ -95,7 +123,51 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env): InvokeConfi
     endpointName: env.ENDPOINT_NAME ?? DEFAULT_ENDPOINT_NAME,
     ioBucket: env.IO_BUCKET ?? "",
     scheduleTable: env.SCHEDULE_TABLE ?? "",
+    homeRegion: env.AWS_REGION,
+    endpointRegions: parseEndpointRegions(env.ENDPOINT_REGIONS),
   };
+}
+
+/**
+ * Parse `ENDPOINT_REGIONS` (`{ "<region>": "<bucket>" }`). Malformed input
+ * yields no extra regions, which only narrows what the proxy will invoke.
+ */
+export function parseEndpointRegions(value: string | undefined): Record<string, string> {
+  if (!value) {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    const out: Record<string, string> = {};
+    for (const [region, bucket] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof bucket === "string" && bucket.length > 0) {
+        out[region] = bucket;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The I/O bucket requests for an endpoint in `region` must use: `IO_BUCKET`
+ * for the home region (or no region), the `ENDPOINT_REGIONS` entry otherwise.
+ *
+ * @throws {UnknownRegionError} for a region the stack does not allow.
+ */
+export function ioBucketForRegion(config: InvokeConfig, region: string | undefined): string {
+  if (!region || region === config.homeRegion) {
+    return config.ioBucket;
+  }
+  const bucket = config.endpointRegions?.[region];
+  if (!bucket) {
+    throw new UnknownRegionError(region);
+  }
+  return bucket;
 }
 
 /**
@@ -108,8 +180,20 @@ export async function resolveCurrentEndpointName(
   dynamodb: DynamoDBClient,
   config: InvokeConfig,
 ): Promise<string> {
+  return (await resolveCurrentTarget(dynamodb, config)).endpointName;
+}
+
+/**
+ * Resolve the endpoint to invoke AND its region from the current-config
+ * pointer. A pointer without a region (written before regions existed), no
+ * pointer, or a failed lookup all mean the home region.
+ */
+export async function resolveCurrentTarget(
+  dynamodb: DynamoDBClient,
+  config: InvokeConfig,
+): Promise<InvokeTarget> {
   if (!config.scheduleTable) {
-    return config.endpointName;
+    return { endpointName: config.endpointName };
   }
   try {
     const key = currentConfigKey();
@@ -120,9 +204,15 @@ export async function resolveCurrentEndpointName(
       }),
     );
     const name = response.Item?.configName?.S;
-    return name && name.length > 0 ? name : config.endpointName;
+    if (!name || name.length === 0) {
+      return { endpointName: config.endpointName };
+    }
+    const region = response.Item?.region?.S;
+    return region && region.length > 0 && region !== config.homeRegion
+      ? { endpointName: name, region }
+      : { endpointName: name };
   } catch {
-    return config.endpointName;
+    return { endpointName: config.endpointName };
   }
 }
 
@@ -155,7 +245,7 @@ export function validateInputLocation(
   const key = withoutScheme.slice(slash + 1);
 
   if (ioBucket && bucket !== ioBucket) {
-    throw new Error("inputLocation bucket is not the configured I/O bucket");
+    throw new Error("inputLocation bucket is not the I/O bucket of the current endpoint's region");
   }
   if (!key.startsWith(INPUTS_PREFIX)) {
     throw new Error("inputLocation key is not under the inputs prefix");
@@ -173,8 +263,9 @@ export async function invokeAsync(
   config: InvokeConfig,
   request: InvokeRequest,
   endpointName: string,
+  region?: string,
 ): Promise<InvokeResponse> {
-  validateInputLocation(request.inputLocation, config.ioBucket);
+  validateInputLocation(request.inputLocation, ioBucketForRegion(config, region));
 
   const response = await runtime.send(
     new InvokeEndpointAsyncCommand({
@@ -194,6 +285,17 @@ export async function invokeAsync(
 /** Lazily-constructed real clients so importing the module is side-effect free. */
 function defaultRuntime(): SageMakerRuntimeClient {
   return new SageMakerRuntimeClient({});
+}
+
+/** One cached runtime client per endpoint region (Lambda containers are reused). */
+const runtimeClients = new Map<string, SageMakerRuntimeClient>();
+function defaultRuntimeFor(region: string): SageMakerRuntimeClient {
+  let client = runtimeClients.get(region);
+  if (!client) {
+    client = new SageMakerRuntimeClient({ region });
+    runtimeClients.set(region, client);
+  }
+  return client;
 }
 function defaultDynamo(): DynamoDBClient {
   return new DynamoDBClient({});
@@ -228,13 +330,16 @@ export async function handler(
   }
 
   try {
-    const endpointName = await resolveCurrentEndpointName(dynamodb, config);
-    const result = await invokeAsync(runtime, config, request, endpointName);
+    const target = await resolveCurrentTarget(dynamodb, config);
+    const client = target.region
+      ? (deps.runtimeFor ?? defaultRuntimeFor)(target.region)
+      : runtime;
+    const result = await invokeAsync(client, config, request, target.endpointName, target.region);
     return json(200, result);
   } catch (err) {
     const message = err instanceof Error ? err.message : "invoke failed";
     // Validation problems are client errors; everything else is a 502 upstream.
-    const isValidation = /inputLocation/.test(message);
+    const isValidation = /inputLocation|endpoint region/.test(message);
     console.error("[invoke-proxy] error", { message });
     return json(isValidation ? 400 : 502, { error: message });
   }

@@ -76,22 +76,27 @@ export const credentialsProvider: AwsCredentialIdentityProvider = async () => {
 // Every client shares the same refreshing credentials provider and the runtime
 // region from getConfig(), so they all assume the visitor's mapped IAM role.
 
-let s3Client: S3Client | undefined;
+// S3 and SageMaker clients are per region: the booth may run its endpoint (and
+// keep that endpoint's I/O bucket) in a region other than the stack's.
+const s3Clients = new Map<string, S3Client>();
 let sageMakerRuntimeClient: SageMakerRuntimeClient | undefined;
-let sageMakerClient: SageMakerClient | undefined;
+const sageMakerClients = new Map<string, SageMakerClient>();
 let dynamoBaseClient: DynamoDBClient | undefined;
 let dynamoDocClient: DynamoDBDocumentClient | undefined;
 let costExplorerClient: CostExplorerClient | undefined;
 
-/** S3 client for async-inference input upload and output/failure polling. */
-export function getS3Client(): S3Client {
-  if (!s3Client) {
-    s3Client = new S3Client({
-      region: getConfig().region,
-      credentials: credentialsProvider,
-    });
+/**
+ * S3 client for async-inference input upload and output/failure polling, for
+ * the bucket's region (default: the stack's region).
+ */
+export function getS3Client(region?: string): S3Client {
+  const key = region && region.length > 0 ? region : getConfig().region;
+  let client = s3Clients.get(key);
+  if (!client) {
+    client = new S3Client({ region: key, credentials: credentialsProvider });
+    s3Clients.set(key, client);
   }
-  return s3Client;
+  return client;
 }
 
 /** SageMaker Runtime client for `InvokeEndpointAsync`. */
@@ -105,15 +110,18 @@ export function getSageMakerRuntimeClient(): SageMakerRuntimeClient {
   return sageMakerRuntimeClient;
 }
 
-/** SageMaker management client for List/Describe/Create/DeleteEndpoint (admin). */
-export function getSageMakerClient(): SageMakerClient {
-  if (!sageMakerClient) {
-    sageMakerClient = new SageMakerClient({
-      region: getConfig().region,
-      credentials: credentialsProvider,
-    });
+/**
+ * SageMaker management client for List/Describe/Create/DeleteEndpoint (admin),
+ * for an endpoint region (default: the stack's region).
+ */
+export function getSageMakerClient(region?: string): SageMakerClient {
+  const key = region && region.length > 0 ? region : getConfig().region;
+  let client = sageMakerClients.get(key);
+  if (!client) {
+    client = new SageMakerClient({ region: key, credentials: credentialsProvider });
+    sageMakerClients.set(key, client);
   }
-  return sageMakerClient;
+  return client;
 }
 
 /**
@@ -160,15 +168,15 @@ export function getCostExplorerClient(): CostExplorerClient {
  * stale credentials. Safe to call when nothing has been created yet.
  */
 export function resetAwsClients(): void {
-  s3Client?.destroy();
+  for (const client of s3Clients.values()) client.destroy();
   sageMakerRuntimeClient?.destroy();
-  sageMakerClient?.destroy();
+  for (const client of sageMakerClients.values()) client.destroy();
   // Destroying the Document client tears down its underlying base client.
   dynamoDocClient?.destroy();
   costExplorerClient?.destroy();
-  s3Client = undefined;
+  s3Clients.clear();
   sageMakerRuntimeClient = undefined;
-  sageMakerClient = undefined;
+  sageMakerClients.clear();
   dynamoBaseClient = undefined;
   dynamoDocClient = undefined;
   costExplorerClient = undefined;

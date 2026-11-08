@@ -10,6 +10,11 @@
  *     and Remove. Exactly ONE managed config is "current" (used by generation +
  *     the scheduler); selecting another switches it (only one current at a time).
  *
+ * When the stack was deployed with extra endpoint regions, a region selector
+ * next to the picker lists the configs of the chosen region, and each managed
+ * row shows its region. Start/Stop/Status then act on the endpoint in that
+ * region, and making it current points the booth (and the scheduler) there.
+ *
  * All AWS access is via `api/endpoints.ts` under the Admin_Role; IAM is the
  * real boundary.
  */
@@ -30,6 +35,12 @@ import {
   type EndpointConfigSummary,
 } from "../api/endpoints";
 import { modelFamilyForConfig, modelFamilyLabel } from "../api/modelFamily";
+import { configId, getEndpointRegions, homeRegion } from "../api/regions";
+
+/** Display name of a config: the bare name at home, `name (region)` elsewhere. */
+function displayName(c: { name: string; region: string }): string {
+  return c.region === homeRegion() ? c.name : `${c.name} (${c.region})`;
+}
 
 type LoadState =
   | { kind: "loading" }
@@ -40,6 +51,8 @@ export function EndpointPanel() {
   const [load, setLoad] = useState<LoadState>({ kind: "loading" });
   const [allConfigs, setAllConfigs] = useState<string[]>([]);
   const [pick, setPick] = useState("");
+  const [regions] = useState(getEndpointRegions);
+  const [pickRegion, setPickRegion] = useState<string>(() => homeRegion());
   const [busyName, setBusyName] = useState<string | null>(null);
   const [confirmingStop, setConfirmingStop] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -60,14 +73,14 @@ export function EndpointPanel() {
     }
   }, []);
 
-  /** Load all account config names for the autocomplete picker (best-effort). */
+  /** Load all config names of the picker's region for the autocomplete (best-effort). */
   const refreshAll = useCallback(async () => {
     try {
-      setAllConfigs(await listAllConfigNames());
+      setAllConfigs(await listAllConfigNames(pickRegion));
     } catch {
       setAllConfigs([]);
     }
-  }, []);
+  }, [pickRegion]);
 
   useEffect(() => {
     void refresh();
@@ -81,16 +94,22 @@ export function EndpointPanel() {
    * changes; cleared on unmount (leaving the panel). A re-entrancy guard skips a
    * tick if the previous one is still in flight.
    */
-  const loadedNamesKey =
+  // Rows are keyed by `id` (the name at home, `name@region` elsewhere), so the
+  // same config name in two regions stays two rows.
+  const loadedKey =
     load.kind === "loaded"
-      ? load.configs.map((c) => c.name).sort().join("|")
+      ? JSON.stringify(
+          load.configs
+            .map((c) => ({ id: c.id, name: c.name, region: c.region }))
+            .sort((a, b) => a.id.localeCompare(b.id)),
+        )
       : "";
   const silentPollingRef = useRef(false);
   useEffect(() => {
-    if (!loadedNamesKey) {
+    if (!loadedKey) {
       return;
     }
-    const names = loadedNamesKey.split("|");
+    const rows = JSON.parse(loadedKey) as Array<{ id: string; name: string; region: string }>;
     const tick = async () => {
       if (silentPollingRef.current) {
         return;
@@ -98,9 +117,9 @@ export function EndpointPanel() {
       silentPollingRef.current = true;
       try {
         const updates = await Promise.all(
-          names.map(async (name) => {
+          rows.map(async (row) => {
             try {
-              return { name, status: await describeEndpointStatus(name) };
+              return { id: row.id, status: await describeEndpointStatus(row.name, row.region) };
             } catch {
               // Leave this row's status unchanged on a transient failure.
               return null;
@@ -112,7 +131,7 @@ export function EndpointPanel() {
             ? {
                 kind: "loaded",
                 configs: prev.configs.map((c) => {
-                  const u = updates.find((x) => x && x.name === c.name);
+                  const u = updates.find((x) => x && x.id === c.id);
                   return u ? { ...c, status: u.status } : c;
                 }),
               }
@@ -124,17 +143,17 @@ export function EndpointPanel() {
     };
     const intervalId = setInterval(() => void tick(), 10_000);
     return () => clearInterval(intervalId);
-  }, [loadedNamesKey]);
+  }, [loadedKey]);
 
-  const refreshOne = useCallback(async (name: string) => {
+  const refreshOne = useCallback(async (c: EndpointConfigSummary) => {
     try {
-      const status = await describeEndpointStatus(name);
+      const status = await describeEndpointStatus(c.name, c.region);
       setLoad((prev) =>
         prev.kind === "loaded"
           ? {
               kind: "loaded",
-              configs: prev.configs.map((c) =>
-                c.name === name ? { ...c, status } : c,
+              configs: prev.configs.map((x) =>
+                x.id === c.id ? { ...x, status } : x,
               ),
             }
           : prev,
@@ -147,37 +166,40 @@ export function EndpointPanel() {
   const onAdd = useCallback(async () => {
     const name = pick.trim();
     if (!name) return;
-    // Only allow adding a config that actually exists in the account.
+    const ref = { name, region: pickRegion };
+    const label = displayName(ref);
+    // Only allow adding a config that actually exists in that region.
     if (allConfigs.length > 0 && !allConfigs.includes(name)) {
-      setMessage(`“${name}” is not an existing endpoint configuration.`);
+      setMessage(`“${label}” is not an existing endpoint configuration.`);
       return;
     }
+    const id = configId(ref);
     const already =
-      load.kind === "loaded" && load.configs.some((c) => c.name === name);
+      load.kind === "loaded" && load.configs.some((c) => c.id === id);
     if (already) {
-      setMessage(`“${name}” is already added.`);
+      setMessage(`“${label}” is already added.`);
       return;
     }
-    setBusyName(name);
+    setBusyName(id);
     setMessage(null);
     try {
-      await addConfig(name);
+      await addConfig(name, pickRegion);
       setPick("");
       await refresh();
-      setMessage(`Added “${name}”.`);
+      setMessage(`Added “${label}”.`);
     } finally {
       setBusyName(null);
     }
-  }, [pick, allConfigs, load, refresh]);
+  }, [pick, pickRegion, allConfigs, load, refresh]);
 
   const onRemove = useCallback(
-    async (name: string) => {
-      setBusyName(name);
+    async (c: EndpointConfigSummary) => {
+      setBusyName(c.id);
       setMessage(null);
       try {
-        await removeConfig(name);
+        await removeConfig(c.name, c.region);
         await refresh();
-        setMessage(`Removed “${name}”.`);
+        setMessage(`Removed “${displayName(c)}”.`);
       } finally {
         setBusyName(null);
       }
@@ -186,13 +208,13 @@ export function EndpointPanel() {
   );
 
   const onStart = useCallback(
-    async (name: string) => {
-      setBusyName(name);
+    async (c: EndpointConfigSummary) => {
+      setBusyName(c.id);
       setMessage(null);
       try {
-        const result = await startEndpoint(name);
+        const result = await startEndpoint(c.name, c.region);
         setMessage(result.message);
-        await refreshOne(name);
+        await refreshOne(c);
       } finally {
         setBusyName(null);
       }
@@ -201,14 +223,14 @@ export function EndpointPanel() {
   );
 
   const onConfirmStop = useCallback(
-    async (name: string) => {
-      setBusyName(name);
+    async (c: EndpointConfigSummary) => {
+      setBusyName(c.id);
       setMessage(null);
       setConfirmingStop(null);
       try {
-        const result = await stopEndpoint(name);
+        const result = await stopEndpoint(c.name, c.region);
         setMessage(result.message);
-        await refreshOne(name);
+        await refreshOne(c);
       } finally {
         setBusyName(null);
       }
@@ -216,23 +238,23 @@ export function EndpointPanel() {
     [refreshOne],
   );
 
-  const onMakeCurrent = useCallback(async (name: string) => {
-    setBusyName(name);
+  const onMakeCurrent = useCallback(async (c: EndpointConfigSummary) => {
+    setBusyName(c.id);
     setMessage(null);
     try {
-      await makeConfigCurrent(name);
+      await makeConfigCurrent(c.name, c.region);
       setLoad((prev) =>
         prev.kind === "loaded"
           ? {
               kind: "loaded",
-              configs: prev.configs.map((c) => ({
-                ...c,
-                isCurrent: c.name === name,
+              configs: prev.configs.map((x) => ({
+                ...x,
+                isCurrent: x.id === c.id,
               })),
             }
           : prev,
       );
-      setMessage(`“${name}” is now the current endpoint.`);
+      setMessage(`“${displayName(c)}” is now the current endpoint.`);
     } finally {
       setBusyName(null);
     }
@@ -246,6 +268,25 @@ export function EndpointPanel() {
           Add an endpoint configuration
         </label>
         <div className="endpoint-add__row">
+          {regions.length > 1 && (
+            <select
+              className="endpoint-add__region"
+              aria-label="Region"
+              data-testid="config-region-select"
+              value={pickRegion}
+              onChange={(e) => {
+                setPickRegion(e.target.value);
+                setPick("");
+                if (message) setMessage(null);
+              }}
+            >
+              {regions.map((r) => (
+                <option key={r.region} value={r.region}>
+                  {r.home ? `${r.region} (booth)` : r.region}
+                </option>
+              ))}
+            </select>
+          )}
           <input
             id={`${datalistId}-input`}
             className="endpoint-add__input"
@@ -293,15 +334,15 @@ export function EndpointPanel() {
       {load.kind === "loaded" && load.configs.length > 0 && (
         <ul className="endpoint-panel__list" data-testid="endpoint-config-list">
           {load.configs.map((c) => {
-            const busy = busyName === c.name;
+            const busy = busyName === c.id;
             const canStart = c.status === EndpointStatus.NOT_DEPLOYED;
             const canStop =
               c.status !== EndpointStatus.NOT_DEPLOYED && c.status !== null;
             return (
               <li
-                key={c.name}
+                key={c.id}
                 className={`endpoint-config${c.isCurrent ? " endpoint-config--current" : ""}`}
-                data-testid={`endpoint-config-${c.name}`}
+                data-testid={`endpoint-config-${c.id}`}
                 data-current={c.isCurrent ? "true" : "false"}
               >
                 <div className="endpoint-config__header">
@@ -309,7 +350,7 @@ export function EndpointPanel() {
                   {c.isCurrent && (
                     <span
                       className="endpoint-config__badge"
-                      data-testid={`current-badge-${c.name}`}
+                      data-testid={`current-badge-${c.id}`}
                     >
                       Current
                     </span>
@@ -320,18 +361,27 @@ export function EndpointPanel() {
                 </div>
                 <div
                   className="endpoint-config__model"
-                  data-testid={`model-${c.name}`}
+                  data-testid={`model-${c.id}`}
                 >
                   Model: {modelFamilyLabel(modelFamilyForConfig(c.name))}
                 </div>
+                {regions.length > 1 && (
+                  <div
+                    className="endpoint-config__region"
+                    data-testid={`region-${c.id}`}
+                  >
+                    Region: {c.region}
+                    {c.region === homeRegion() ? " (booth)" : ""}
+                  </div>
+                )}
                 <div className="endpoint-config__actions">
                   {!c.isCurrent && (
                     <TouchButton
                       variant="secondary"
                       className="endpoint-config__make-current"
-                      testId={`make-current-${c.name}`}
+                      testId={`make-current-${c.id}`}
                       disabled={busy}
-                      onClick={() => void onMakeCurrent(c.name)}
+                      onClick={() => void onMakeCurrent(c)}
                     >
                       Make current
                     </TouchButton>
@@ -339,61 +389,61 @@ export function EndpointPanel() {
                   <div className="endpoint-config__action-row">
                     <TouchButton
                       variant="secondary"
-                      testId={`refresh-${c.name}`}
+                      testId={`refresh-${c.id}`}
                       disabled={busy}
-                      onClick={() => void refreshOne(c.name)}
+                      onClick={() => void refreshOne(c)}
                     >
                       Refresh
                     </TouchButton>
                     {canStart && (
                       <PrimaryButton
-                        testId={`start-${c.name}`}
+                        testId={`start-${c.id}`}
                         block={false}
                         disabled={busy}
-                        onClick={() => void onStart(c.name)}
+                        onClick={() => void onStart(c)}
                       >
                         Start
                       </PrimaryButton>
                     )}
-                    {canStop && confirmingStop !== c.name && (
+                    {canStop && confirmingStop !== c.id && (
                       <TouchButton
                         variant="danger"
-                        testId={`stop-${c.name}`}
+                        testId={`stop-${c.id}`}
                         disabled={busy}
-                        onClick={() => setConfirmingStop(c.name)}
+                        onClick={() => setConfirmingStop(c.id)}
                       >
                         Stop
                       </TouchButton>
                     )}
                     <TouchButton
                       variant="secondary"
-                      testId={`remove-${c.name}`}
+                      testId={`remove-${c.id}`}
                       disabled={busy}
-                      onClick={() => void onRemove(c.name)}
+                      onClick={() => void onRemove(c)}
                     >
                       Remove
                     </TouchButton>
                   </div>
                 </div>
 
-                {confirmingStop === c.name && (
+                {confirmingStop === c.id && (
                   <div
                     className="endpoint-panel__confirm"
-                    data-testid={`stop-confirm-${c.name}`}
+                    data-testid={`stop-confirm-${c.id}`}
                   >
                     <p>Delete this endpoint? This stops serving transformations.</p>
                     <TouchButton
                       variant="secondary"
-                      testId={`cancel-stop-${c.name}`}
+                      testId={`cancel-stop-${c.id}`}
                       onClick={() => setConfirmingStop(null)}
                     >
                       Cancel
                     </TouchButton>
                     <TouchButton
                       variant="danger"
-                      testId={`confirm-stop-${c.name}`}
+                      testId={`confirm-stop-${c.id}`}
                       disabled={busy}
-                      onClick={() => void onConfirmStop(c.name)}
+                      onClick={() => void onConfirmStop(c)}
                     >
                       Confirm Stop
                     </TouchButton>

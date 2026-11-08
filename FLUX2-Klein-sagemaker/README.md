@@ -253,6 +253,25 @@ The script does **not** start a g7e instance. To use FLUX 3, sign in as admin, o
 
 Related flags: `--hf-token`, `--flux3-config-name`, `--flux3-instance-type` and `--skip-flux3` (skips step 5 entirely).
 
+### Endpoints in other regions
+
+g7e capacity differs by region: in November 2026, us-east-1 failed every start with `InsufficientInstanceCapacity` while us-east-2 had an instance within 5 minutes. The booth itself (sign-in, schedule, prompts, UI) stays in its region, but the admin can run the endpoint in another one:
+
+```bash
+./deploy.sh --skip-passwords --endpoint-regions us-east-2
+```
+
+For each extra region, `deploy.sh`:
+
+1. uses that region's default SageMaker bucket, `sagemaker-<region>-<account>`, and creates it (private) if it doesn't exist;
+2. passes the region to the stack, which grants the booth roles, the invoke proxy, the scheduler and the FLUX 3 role access to SageMaker in that region and to the booth's prefixes in that bucket, and sets the bucket's CORS for the booth's CloudFront domain;
+3. copies the staged FLUX 3 weights from the home bucket (S3 to S3, about 39 GB, once), uploads the serving code, and creates the same `FluxAiBoot-flux3-g7e` model and endpoint config there;
+4. adds that config to the booth's managed list as a separate row.
+
+In **Admin → Endpoint**, a region selector appears next to the config picker, and each row shows its region. Start, Stop and status act on the endpoint in the row's region. **Make current** records the region with the current config, so the booth sends requests to that region's bucket and the invoke proxy and the scheduler drive the endpoint there. A config with the same name in two regions is two rows; make the one with capacity current and start it.
+
+A plain re-deploy keeps the regions the stack already has. `--endpoint-regions none` removes them; managed rows for a removed region then stop working until the region is added back. Each endpoint keeps its requests and results in its own region's bucket, and the browser uploads to and polls that bucket directly.
+
 **How the booth picks FLUX 3.** The booth reads the current config name before each generation. A name that matches `flux3` or `flux-3` (case-insensitive) selects the FLUX 3 prompts and sampling (16 steps, guidance 1); any other name keeps the FLUX.2 behaviour. A custom `--flux3-config-name` must therefore contain `flux3`, and the script rejects one that doesn't. The Endpoint tab shows which model family each config runs.
 
 **Prompts per model family.** Each effect has a FLUX.2 prompt and a FLUX 3 prompt. The FLUX 3 prompts follow Black Forest Labs' FLUX 3 editing guidance: one positive instruction that names the change, then what must stay (faces, pose, position, lighting), with the image roles stated explicitly in the two-image merge. The endpoint's prompt upsampler expands them into a full caption, so they are shorter than the FLUX.2 prompts. Prompt edits in the admin view are saved for the model family of the current config, so a FLUX.2 custom prompt and a FLUX 3 custom prompt for the same effect don't overwrite each other.

@@ -1510,6 +1510,17 @@ input[type="date"]:focus {
   min-width: 0;
 }
 
+.endpoint-add__region {
+  flex: 0 0 auto;
+  min-height: var(--touch-target-min);
+  padding: 0 var(--space-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: inherit;
+  font: inherit;
+}
+
 .endpoint-add__row .touch-button {
   flex: 0 0 auto;
   width: auto;
@@ -1555,7 +1566,8 @@ input[type="date"]:focus {
   font-weight: var(--font-weight-bold);
 }
 
-.endpoint-config__status {
+.endpoint-config__status,
+.endpoint-config__region {
   font-size: var(--font-size-sm);
   color: var(--color-muted);
 }

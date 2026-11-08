@@ -18,6 +18,9 @@
 #          current and start it from the Endpoint tab like any other config.
 #      The endpoint itself is NOT started here: the booth starts and stops it
 #      (Endpoint tab or schedule), so no g7e instance is billed by a deploy.
+#      With --endpoint-regions, the same config is also created in each extra
+#      region (weights copied there from the home bucket), so the admin can run
+#      the endpoint wherever g7e capacity is available.
 #   6. sets PERMANENT passwords for the initial admin/visitor users so they can
 #      sign in immediately (AdminCreateUser otherwise leaves them in
 #      FORCE_CHANGE_PASSWORD)
@@ -97,6 +100,13 @@ FLUX3_HF_REPO="${FLUX3_HF_REPO:-black-forest-labs/flux-3-image-klein}"
 # the stored one.
 HF_TOKEN="${HF_TOKEN:-}"
 
+# Extra regions the admin may pick endpoints from (comma-separated, e.g.
+# us-east-2). Each one uses its default SageMaker bucket
+# (sagemaker-<region>-<account>, created if missing) for the booth's requests
+# and results, and gets its own copy of the FLUX 3 endpoint config. Unset keeps
+# the regions the deployed stack already has; "none" means the home region only.
+ENDPOINT_REGIONS="${ENDPOINT_REGIONS:-}"
+
 # --- Usage -------------------------------------------------------------------
 usage() {
   cat <<'USAGE'
@@ -118,6 +128,9 @@ Options (each has a default; flag overrides env var overrides default):
   --admin-username <name>            Initial admin username (default: admin)
   --standard-username <name>         Initial visitor username (default: visitor)
   --scheduler-timezone <tz>          IANA timezone (default: Asia/Jerusalem)
+  --endpoint-regions <r1,r2>         Extra regions the admin may pick endpoints
+                                     from (e.g. us-east-2). Default: keep the
+                                     deployed stack's; "none" = home region only.
 
 FLUX 3 Image Klein (g7e) endpoint config:
   --hf-token <token>                 Hugging Face read token for the gated
@@ -150,6 +163,7 @@ while [[ $# -gt 0 ]]; do
     --admin-username) ADMIN_USERNAME="$2"; shift 2 ;;
     --standard-username) STANDARD_USERNAME="$2"; shift 2 ;;
     --scheduler-timezone) SCHEDULER_TIMEZONE="$2"; shift 2 ;;
+    --endpoint-regions) ENDPOINT_REGIONS="$2"; shift 2 ;;
     --hf-token) HF_TOKEN="$2"; shift 2 ;;
     --flux3-config-name) FLUX3_CONFIG_NAME="$2"; shift 2 ;;
     --flux3-instance-type) FLUX3_INSTANCE_TYPE="$2"; shift 2 ;;
@@ -182,6 +196,53 @@ if [[ -z "$EXISTING_IO_BUCKET" ]]; then
   fi
   EXISTING_IO_BUCKET="sagemaker-${REGION}-${ACCOUNT_ID}"
   echo "==> Using I/O bucket (default for this account): $EXISTING_IO_BUCKET"
+fi
+
+# --- Extra endpoint regions --------------------------------------------------
+# Unset: keep what the deployed stack has (output EndpointRegions, written as
+# "home=bucket,extra=bucket"), so a plain re-deploy never drops a region.
+if [[ -z "$ENDPOINT_REGIONS" ]]; then
+  DEPLOYED_REGIONS="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" \
+    --query "Stacks[0].Outputs[?OutputKey=='EndpointRegions'].OutputValue" --output text 2>/dev/null || true)"
+  if [[ -n "$DEPLOYED_REGIONS" && "$DEPLOYED_REGIONS" != "None" ]]; then
+    ENDPOINT_REGIONS="$(printf '%s' "$DEPLOYED_REGIONS" | tr ',' '\n' | cut -d= -f1 | paste -sd, -)"
+  fi
+elif [[ "$ENDPOINT_REGIONS" == none ]]; then
+  ENDPOINT_REGIONS=""
+fi
+EXTRA_REGION_LIST=""
+for r in $(printf '%s' "$ENDPOINT_REGIONS" | tr ',' ' '); do
+  if [[ ! "$r" =~ ^[a-z]{2}(-[a-z]+)+-[0-9]$ ]]; then
+    echo "ERROR: --endpoint-regions: \"$r\" is not an AWS region name." >&2
+    exit 2
+  fi
+  if [[ "$r" != "$REGION" && " $EXTRA_REGION_LIST " != *" $r "* ]]; then
+    EXTRA_REGION_LIST="${EXTRA_REGION_LIST:+$EXTRA_REGION_LIST }$r"
+  fi
+done
+EXTRA_REGIONS_CSV="$(printf '%s' "$EXTRA_REGION_LIST" | tr ' ' ',')"
+if [[ -n "$EXTRA_REGION_LIST" ]]; then
+  if [[ -z "$ACCOUNT_ID" ]]; then
+    echo "ERROR: could not resolve the AWS account id, needed for the extra regions' buckets." >&2
+    exit 2
+  fi
+  echo "==> Extra endpoint regions: $EXTRA_REGIONS_CSV"
+  for r in $EXTRA_REGION_LIST; do
+    b="sagemaker-$r-$ACCOUNT_ID"
+    if aws s3api head-bucket --bucket "$b" --region "$r" >/dev/null 2>&1; then
+      echo "    I/O bucket for $r: $b"
+    else
+      echo "    Creating the I/O bucket for $r: $b"
+      if [[ "$r" == us-east-1 ]]; then
+        aws s3api create-bucket --bucket "$b" --region "$r" >/dev/null
+      else
+        aws s3api create-bucket --bucket "$b" --region "$r" \
+          --create-bucket-configuration LocationConstraint="$r" >/dev/null
+      fi
+      aws s3api put-public-access-block --bucket "$b" --region "$r" --public-access-block-configuration \
+        BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+    fi
+  done
 fi
 
 # --- Paths -------------------------------------------------------------------
@@ -262,6 +323,7 @@ echo "==> [3/6] Deploying $STACK_NAME"
   CDK_DEFAULT_REGION="$REGION" npx cdk deploy \
     --require-approval never \
     --context existingIoBucketName="$EXISTING_IO_BUCKET" \
+    --context endpointRegions="$EXTRA_REGIONS_CSV" \
     --parameters EndpointName="$ENDPOINT_NAME" \
     --parameters EndpointConfigName="$ENDPOINT_CONFIG_NAME" \
     --parameters InitialAdminUsername="$ADMIN_USERNAME" \
@@ -348,13 +410,16 @@ else
 
   # 5b. Serving code next to the weights: the Ray Serve DLC runs
   #     `serve run /opt/ml/model/config.yaml` after installing code/requirements.txt.
-  aws s3 cp --only-show-errors "$FLUX3_DIR/serving/config.yaml" "s3://$IO_BUCKET/$MODEL_PREFIX/config.yaml" --region "$REGION"
-  for f in flux3_app.py requirements.txt; do
-    aws s3 cp --only-show-errors "$FLUX3_DIR/serving/code/$f" "s3://$IO_BUCKET/$MODEL_PREFIX/code/$f" --region "$REGION"
-  done
+  flux3_upload_serving() {  # <region> <bucket>
+    aws s3 cp --only-show-errors "$FLUX3_DIR/serving/config.yaml" "s3://$2/$MODEL_PREFIX/config.yaml" --region "$1"
+    for f in flux3_app.py requirements.txt; do
+      aws s3 cp --only-show-errors "$FLUX3_DIR/serving/code/$f" "s3://$2/$MODEL_PREFIX/code/$f" --region "$1"
+    done
+    echo "    Uploaded the serving code to s3://$2/$MODEL_PREFIX/"
+  }
+  flux3_upload_serving "$REGION" "$IO_BUCKET"
   aws s3 cp --only-show-errors "$FLUX3_DIR/scripts/stage_weights.py" \
     "s3://$IO_BUCKET/$FLUX3_PREFIX/staging/code/stage_weights.py" --region "$REGION"
-  echo "    Uploaded the serving code to $MODEL_URI"
 
   # 5c. Weights (~39 GB), staged once by a CPU Processing job inside AWS. The
   #     manifest is written last, so its presence means staging completed.
@@ -412,24 +477,30 @@ EOF
     echo "    Weights staged under ${MODEL_URI}weights/"
   fi
 
-  # 5d. Model + EndpointConfig. The booth creates the endpoint FROM this config
-  #     (same name), so leave them alone while an endpoint of that name exists.
-  FLUX3_ENDPOINT_STATUS="$(aws sagemaker describe-endpoint --endpoint-name "$FLUX3_CONFIG_NAME" \
-    --region "$REGION" --query EndpointStatus --output text 2>/dev/null || echo NONE)"
-  if [[ "$FLUX3_ENDPOINT_STATUS" != "NONE" ]]; then
-    echo "    Endpoint '$FLUX3_CONFIG_NAME' exists ($FLUX3_ENDPOINT_STATUS): its model and config are left as they are."
-    echo "    Stop it from the booth and re-run deploy.sh to apply image or environment changes."
-    echo "    (Serving code changes in S3 apply the next time the booth starts it.)"
-  else
-    aws sagemaker delete-endpoint-config --endpoint-config-name "$FLUX3_CONFIG_NAME" --region "$REGION" >/dev/null 2>&1 || true
-    aws sagemaker delete-model --model-name "$FLUX3_CONFIG_NAME" --region "$REGION" >/dev/null 2>&1 || true
-    cat > "$WORK_DIR/model.json" <<EOF
+  # 5d. Model + EndpointConfig in <region>, reading model data from and
+  #     writing results to <bucket>. The booth creates the endpoint FROM this
+  #     config (same name), so leave them alone while an endpoint of that name
+  #     exists in that region.
+  flux3_model_config() {  # <region> <bucket>
+    local r="$1" b="$2"
+    local image="$FLUX3_DLC_ACCOUNT.dkr.ecr.$1.amazonaws.com/ray:$FLUX3_IMAGE_TAG"
+    local model_uri="s3://$2/$MODEL_PREFIX/"
+    FLUX3_ENDPOINT_STATUS="$(aws sagemaker describe-endpoint --endpoint-name "$FLUX3_CONFIG_NAME" \
+      --region "$r" --query EndpointStatus --output text 2>/dev/null || echo NONE)"
+    if [[ "$FLUX3_ENDPOINT_STATUS" != "NONE" ]]; then
+      echo "    Endpoint '$FLUX3_CONFIG_NAME' exists in $r ($FLUX3_ENDPOINT_STATUS): its model and config are left as they are."
+      echo "    Stop it from the booth and re-run deploy.sh to apply image or environment changes."
+      echo "    (Serving code changes in S3 apply the next time the booth starts it.)"
+    else
+      aws sagemaker delete-endpoint-config --endpoint-config-name "$FLUX3_CONFIG_NAME" --region "$r" >/dev/null 2>&1 || true
+      aws sagemaker delete-model --model-name "$FLUX3_CONFIG_NAME" --region "$r" >/dev/null 2>&1 || true
+      cat > "$WORK_DIR/model.json" <<EOF
 {
   "ModelName": "$FLUX3_CONFIG_NAME",
   "ExecutionRoleArn": "$FLUX3_ROLE_ARN",
   "PrimaryContainer": {
-    "Image": "$IMAGE_URI",
-    "ModelDataSource": {"S3DataSource": {"S3Uri": "$MODEL_URI", "S3DataType": "S3Prefix", "CompressionType": "None"}},
+    "Image": "$image",
+    "ModelDataSource": {"S3DataSource": {"S3Uri": "$model_uri", "S3DataType": "S3Prefix", "CompressionType": "None"}},
     "Environment": {
       "FLUX3_WEIGHTS_DIR": "/opt/ml/model/weights",
       "RAYSERVE_BACKEND_TIMEOUT": "3600",
@@ -444,20 +515,20 @@ EOF
   "Tags": [{"Key": "AiPhoto", "Value": "true"}]
 }
 EOF
-    for attempt in 1 2 3 4 5; do
-      if aws sagemaker create-model --cli-input-json "file://$WORK_DIR/model.json" \
-          --region "$REGION" >/dev/null 2>"$WORK_DIR/err"; then
-        break
-      fi
-      if [[ $attempt -eq 5 ]] || ! grep -qi "role" "$WORK_DIR/err"; then
-        cat "$WORK_DIR/err" >&2
-        exit 1
-      fi
-      sleep $((attempt * 15))
-    done
-    # Same async I/O prefixes as the FLUX.2 endpoint: the booth uploads requests
-    # to flux2-klein-inputs/ and polls flux2-klein-outputs/ + flux2-klein-failures/.
-    cat > "$WORK_DIR/config.json" <<EOF
+      for attempt in 1 2 3 4 5; do
+        if aws sagemaker create-model --cli-input-json "file://$WORK_DIR/model.json" \
+            --region "$r" >/dev/null 2>"$WORK_DIR/err"; then
+          break
+        fi
+        if [[ $attempt -eq 5 ]] || ! grep -qi "role" "$WORK_DIR/err"; then
+          cat "$WORK_DIR/err" >&2
+          exit 1
+        fi
+        sleep $((attempt * 15))
+      done
+      # Same async I/O prefixes as the FLUX.2 endpoint: the booth uploads requests
+      # to flux2-klein-inputs/ and polls flux2-klein-outputs/ + flux2-klein-failures/.
+      cat > "$WORK_DIR/config.json" <<EOF
 {
   "EndpointConfigName": "$FLUX3_CONFIG_NAME",
   "ProductionVariants": [{
@@ -470,31 +541,65 @@ EOF
     "InferenceAmiVersion": "$FLUX3_INFERENCE_AMI"
   }],
   "AsyncInferenceConfig": {
-    "OutputConfig": {"S3OutputPath": "s3://$IO_BUCKET/flux2-klein-outputs/",
-                     "S3FailurePath": "s3://$IO_BUCKET/flux2-klein-failures/"},
+    "OutputConfig": {"S3OutputPath": "s3://$b/flux2-klein-outputs/",
+                     "S3FailurePath": "s3://$b/flux2-klein-failures/"},
     "ClientConfig": {"MaxConcurrentInvocationsPerInstance": 1}
   },
   "Tags": [{"Key": "AiPhoto", "Value": "true"}]
 }
 EOF
-    aws sagemaker create-endpoint-config --cli-input-json "file://$WORK_DIR/config.json" --region "$REGION" >/dev/null
-    echo "    Created SageMaker model + endpoint config '$FLUX3_CONFIG_NAME'"
-  fi
+      aws sagemaker create-endpoint-config --cli-input-json "file://$WORK_DIR/config.json" --region "$r" >/dev/null
+      echo "    Created SageMaker model + endpoint config '$FLUX3_CONFIG_NAME' in $r"
+    fi
+  }
+  flux3_model_config "$REGION" "$IO_BUCKET"
 
   # 5e. Offer it in the booth's Endpoint tab (managed configs). Never touches
-  #     the current-config pointer: the admin decides when to switch.
-  NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
-  if aws dynamodb put-item --table-name "$SCHEDULE_TABLE" --region "$REGION" \
-      --condition-expression "attribute_not_exists(pk)" \
-      --item "{\"pk\":{\"S\":\"CONFIG#MANAGED\"},\"sk\":{\"S\":\"CONFIG#$FLUX3_CONFIG_NAME\"},\"configName\":{\"S\":\"$FLUX3_CONFIG_NAME\"},\"addedAt\":{\"S\":\"$NOW_ISO\"}}" \
-      >/dev/null 2>"$WORK_DIR/err"; then
-    echo "    Added '$FLUX3_CONFIG_NAME' to the booth's managed endpoint configs"
-  elif grep -q ConditionalCheckFailed "$WORK_DIR/err"; then
-    echo "    '$FLUX3_CONFIG_NAME' is already one of the booth's managed endpoint configs"
-  else
-    cat "$WORK_DIR/err" >&2
-    exit 1
-  fi
+  #     the current-config pointer: the admin decides when to switch. The
+  #     table lives in the home region; a config in another region is keyed
+  #     CONFIG#<region>#<name> (ui/src/api/schedule.ts managedConfigSk).
+  flux3_register() {  # <endpoint region>
+    local r="$1" sk="CONFIG#$FLUX3_CONFIG_NAME" label="'$FLUX3_CONFIG_NAME'"
+    if [[ "$r" != "$REGION" ]]; then
+      sk="CONFIG#$r#$FLUX3_CONFIG_NAME"
+      label="'$FLUX3_CONFIG_NAME' ($r)"
+    fi
+    local now_iso
+    now_iso="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+    if aws dynamodb put-item --table-name "$SCHEDULE_TABLE" --region "$REGION" \
+        --condition-expression "attribute_not_exists(pk)" \
+        --item "{\"pk\":{\"S\":\"CONFIG#MANAGED\"},\"sk\":{\"S\":\"$sk\"},\"configName\":{\"S\":\"$FLUX3_CONFIG_NAME\"},\"region\":{\"S\":\"$r\"},\"addedAt\":{\"S\":\"$now_iso\"}}" \
+        >/dev/null 2>"$WORK_DIR/err"; then
+      echo "    Added $label to the booth's managed endpoint configs"
+    elif grep -q ConditionalCheckFailed "$WORK_DIR/err"; then
+      echo "    $label is already one of the booth's managed endpoint configs"
+    else
+      cat "$WORK_DIR/err" >&2
+      exit 1
+    fi
+  }
+  flux3_register "$REGION"
+
+  # 5f. The same endpoint config in each extra region. The weights are copied
+  #     from the home bucket server-side (S3 to S3) once; the manifest is copied
+  #     last, so its presence means the copy completed.
+  for XR in $EXTRA_REGION_LIST; do
+    XB="sagemaker-$XR-$ACCOUNT_ID"
+    echo "    --- $XR (bucket $XB)"
+    if aws s3api head-object --bucket "$XB" --key "$MODEL_PREFIX/weights/_flux3_stage.json" \
+        --region "$XR" >/dev/null 2>&1; then
+      echo "    Weights already staged under s3://$XB/$MODEL_PREFIX/weights/"
+    else
+      echo "    Copying the staged weights to s3://$XB/$MODEL_PREFIX/weights/ (about 39 GB, S3 to S3, 10-20 minutes)"
+      aws s3 sync --only-show-errors "s3://$IO_BUCKET/$MODEL_PREFIX/weights/" "s3://$XB/$MODEL_PREFIX/weights/" \
+        --source-region "$REGION" --region "$XR" --exclude "_flux3_stage.json"
+      aws s3 cp --only-show-errors "s3://$IO_BUCKET/$MODEL_PREFIX/weights/_flux3_stage.json" \
+        "s3://$XB/$MODEL_PREFIX/weights/_flux3_stage.json" --source-region "$REGION" --region "$XR"
+    fi
+    flux3_upload_serving "$XR" "$XB"
+    flux3_model_config "$XR" "$XB"
+    flux3_register "$XR"
+  done
 fi
 
 # --- 6. Set permanent passwords for the initial users ------------------------
@@ -531,6 +636,9 @@ echo "    Visitor user:       $STANDARD_USERNAME"
 if [[ "$SKIP_FLUX3" != true ]]; then
   echo "    FLUX 3 endpoint:    '$FLUX3_CONFIG_NAME' ($FLUX3_INSTANCE_TYPE). In the booth: Admin -> Endpoint ->"
   echo "                        Make current, then Start (about 5 minutes; g7e capacity can be limited)."
+  if [[ -n "$EXTRA_REGION_LIST" ]]; then
+    echo "                        Also available in: $EXTRA_REGIONS_CSV (pick the row with that region)."
+  fi
 fi
 echo ""
 echo "    Run locally:        ( cd ui && npm run dev )  ->  http://localhost:5173"

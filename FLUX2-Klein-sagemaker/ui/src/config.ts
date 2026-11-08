@@ -49,6 +49,11 @@ export interface BoothConfig {
    * support CORS, so the browser cannot call InvokeEndpointAsync directly.
    */
   invokeFunctionUrl: string;
+  /**
+   * Extra regions the admin may run endpoints in, each with its own async I/O
+   * bucket (see `api/regions.ts`). Optional: absent means the home region only.
+   */
+  endpointRegions?: Array<{ region: string; ioBucket: string }>;
 }
 
 /** The subset of {@link BoothConfig} required to authenticate and mint credentials. */
@@ -93,7 +98,29 @@ function readRawConfig(): Partial<BoothConfig> {
     timezone: injected?.timezone ?? env?.VITE_TIMEZONE,
     invokeFunctionUrl:
       injected?.invokeFunctionUrl ?? env?.VITE_INVOKE_FUNCTION_URL,
+    endpointRegions:
+      injected?.endpointRegions ?? parseEndpointRegions(env?.VITE_ENDPOINT_REGIONS),
   };
+}
+
+/**
+ * Parse `VITE_ENDPOINT_REGIONS` (local dev), a JSON array of
+ * `{ "region": ..., "ioBucket": ... }`. Anything unparsable means none.
+ */
+function parseEndpointRegions(
+  value: string | undefined,
+): Array<{ region: string; ioBucket: string }> | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? (parsed as Array<{ region: string; ioBucket: string }>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Throws a descriptive error when a required config field is missing or blank. */
@@ -146,5 +173,6 @@ export function getConfig(): BoothConfig {
     // Optional: defaults to the scheduler's default timezone when not injected.
     timezone: raw.timezone && raw.timezone !== "" ? raw.timezone : "Asia/Jerusalem",
     invokeFunctionUrl: requireField(raw.invokeFunctionUrl, "invokeFunctionUrl"),
+    endpointRegions: Array.isArray(raw.endpointRegions) ? raw.endpointRegions : [],
   };
 }

@@ -38,7 +38,8 @@ import {
 } from "./awsClients";
 import { invokeEndpointAsyncViaProxy } from "./invokeProxy";
 import { buildAsyncRequest, buildMergeRequest } from "./requestBuilder";
-import { getModelFamily, refreshModelFamily, type ModelFamily } from "./modelFamily";
+import { getModelFamily, refreshCurrentTarget, type ModelFamily } from "./modelFamily";
+import { ioBucketForRegion, regionOrHome } from "./regions";
 import { decidePoll, POLL_TIMEOUT_MS, type PollDecision } from "./pollDecision";
 
 /** S3 key prefixes used by the existing async inference flow. */
@@ -86,6 +87,14 @@ export interface SubmitResult {
   outputKey: string;
   /** The S3 key the endpoint writes a failure record to (`FailureLocation`). */
   failureKey?: string;
+  /**
+   * Bucket and region of the request: the I/O bucket of the current endpoint's
+   * region at submit time. Polling reads from here, so a config switch while a
+   * job runs does not lose its result. Absent on handles from older code, which
+   * means the home bucket.
+   */
+  bucket?: string;
+  region?: string;
 }
 
 /** Result of a single {@link pollGeneration} call. */
@@ -124,16 +133,23 @@ function newJobId(): string {
  * asynchronously, and return the server-generated output/failure keys to poll.
  * Shared by {@link submitGeneration} and {@link submitMerge}.
  */
-async function submitAsyncRequest(body: string): Promise<SubmitResult> {
-  const config = getConfig();
+async function submitAsyncRequest(
+  body: string,
+  endpointRegion: string | null,
+): Promise<SubmitResult> {
   const jobId = newJobId();
-  const s3 = getS3Client();
+  // The endpoint reads its requests from, and writes results to, the I/O bucket
+  // of its own region. The invoke proxy resolves the same current config and
+  // rejects a request whose bucket does not belong to that config's region.
+  const region = regionOrHome(endpointRegion);
+  const bucket = ioBucketForRegion(region);
+  const s3 = getS3Client(region);
 
   // 1) Upload the request JSON to the inputs prefix.
   await withAuthRetry(() =>
     s3.send(
       new PutObjectCommand({
-        Bucket: config.ioBucket,
+        Bucket: bucket,
         Key: inputKey(jobId),
         Body: body,
         ContentType: "application/json",
@@ -146,7 +162,7 @@ async function submitAsyncRequest(body: string): Promise<SubmitResult> {
   //    this one call is SigV4-signed to an IAM-authenticated Lambda Function URL.
   //    The response carries the SERVER-GENERATED output/failure locations; we
   //    must poll those exact keys (they are NOT derived from the input key).
-  const inputLocation = `s3://${config.ioBucket}/${inputKey(jobId)}`;
+  const inputLocation = `s3://${bucket}/${inputKey(jobId)}`;
   const invokeResult = await withAuthRetry(() =>
     invokeEndpointAsyncViaProxy({
       inputLocation,
@@ -167,6 +183,8 @@ async function submitAsyncRequest(body: string): Promise<SubmitResult> {
     submittedAt: Date.now(),
     outputKey,
     ...(failureKey ? { failureKey } : {}),
+    bucket,
+    region,
   };
 }
 
@@ -187,9 +205,9 @@ export async function submitGeneration(req: SubmitRequest): Promise<SubmitResult
 
   // Prompt and sampling depend on which model the current config serves; read
   // the pointer now (best-effort) so a config switch applies to this request.
-  const family = await refreshModelFamily();
+  const { family, region } = await refreshCurrentTarget();
   const asyncRequest = buildAsyncRequest({ effectId: req.effectId, photo: req.photo, family });
-  return submitAsyncRequest(JSON.stringify(asyncRequest));
+  return submitAsyncRequest(JSON.stringify(asyncRequest), region);
 }
 
 /**
@@ -230,17 +248,19 @@ export async function submitMerge(req: SubmitMergeRequest): Promise<SubmitResult
   }
 
   const images = await Promise.all(req.images.map(toBase64Payload));
+  // Re-read the pointer for the region; the prompt keeps the family it was built for.
+  const target = await refreshCurrentTarget();
   const asyncRequest = buildMergeRequest({
     prompt: req.prompt,
     images,
     family: req.family ?? getModelFamily(),
   });
-  return submitAsyncRequest(JSON.stringify(asyncRequest));
+  return submitAsyncRequest(JSON.stringify(asyncRequest), target.region);
 }
 
 /** True iff a HeadObject succeeds (object exists); false on a 404/NotFound. */
-async function objectExists(bucket: string, key: string): Promise<boolean> {
-  const s3 = getS3Client();
+async function objectExists(bucket: string, key: string, region: string): Promise<boolean> {
+  const s3 = getS3Client(region);
   try {
     await withAuthRetry(() =>
       s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key })),
@@ -272,8 +292,8 @@ function isNotFound(err: unknown): boolean {
 }
 
 /** Read the result PNG bytes and turn them into an object URL for `<img>`. */
-async function readResultObjectUrl(bucket: string, key: string): Promise<string> {
-  const s3 = getS3Client();
+async function readResultObjectUrl(bucket: string, key: string, region: string): Promise<string> {
+  const s3 = getS3Client(region);
   const response = await withAuthRetry(() =>
     s3.send(new GetObjectCommand({ Bucket: bucket, Key: key })),
   );
@@ -307,16 +327,17 @@ async function readResultObjectUrl(bucket: string, key: string): Promise<string>
  * leaving the result screen.
  */
 export async function pollGeneration(handle: SubmitResult): Promise<PollResult> {
-  const config = getConfig();
   const elapsedMs = Date.now() - handle.submittedAt;
+  const region = regionOrHome(handle.region);
+  const bucket = handle.bucket ?? getConfig().ioBucket;
 
-  const outputPresent = await objectExists(config.ioBucket, handle.outputKey);
+  const outputPresent = await objectExists(bucket, handle.outputKey, region);
   // Only HEAD the failure key when there is no output (output wins precedence)
   // and a failure key was provided by the endpoint.
   const failurePresent =
     outputPresent || !handle.failureKey
       ? false
-      : await objectExists(config.ioBucket, handle.failureKey);
+      : await objectExists(bucket, handle.failureKey, region);
 
   const decision: PollDecision = decidePoll({
     outputPresent,
@@ -327,10 +348,7 @@ export async function pollGeneration(handle: SubmitResult): Promise<PollResult> 
 
   switch (decision) {
     case "READY": {
-      const imageUrl = await readResultObjectUrl(
-        config.ioBucket,
-        handle.outputKey,
-      );
+      const imageUrl = await readResultObjectUrl(bucket, handle.outputKey, region);
       return { status: "READY", imageUrl, aiGenerated: true };
     }
     case "FAILED":

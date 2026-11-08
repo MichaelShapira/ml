@@ -20,6 +20,7 @@ import {
 
 import { getConfig } from "../config";
 import { getDynamoClient, withAuthRetry } from "./awsClients";
+import { isHomeRegion, regionOrHome, type ConfigRef } from "./regions";
 import {
   makePk,
   makeSk,
@@ -37,9 +38,16 @@ export const CURRENT_CONFIG_SK = "CONFIG#CURRENT";
 
 /** Partition key under which the admin's curated "managed config" list lives. */
 export const MANAGED_CONFIG_PK = "CONFIG#MANAGED";
-/** Build the sort key for a managed config entry. */
-export function managedConfigSk(configName: string): string {
-  return `CONFIG#${configName}`;
+/**
+ * Build the sort key for a managed config entry. Home-region configs keep the
+ * original `CONFIG#<name>` key; a config in another region is
+ * `CONFIG#<region>#<name>`, because the same name can exist in two regions.
+ * (SageMaker names cannot contain `#`.)
+ */
+export function managedConfigSk(configName: string, region?: string | null): string {
+  return isHomeRegion(region)
+    ? `CONFIG#${configName}`
+    : `CONFIG#${regionOrHome(region)}#${configName}`;
 }
 
 /** Thrown when an upsert is rejected by client-side validation (end <= start). */
@@ -126,10 +134,11 @@ export async function deleteWorkingHours(day: string): Promise<void> {
 }
 
 /**
- * Read the currently-selected endpoint config name (the booth's "current"
- * pointer), or `null` when none is set yet.
+ * Read the currently-selected endpoint config (the booth's "current" pointer)
+ * and its region, or `null` when none is set yet. A pointer written before
+ * regions existed has no `region` and means the home region.
  */
-export async function getCurrentConfigName(): Promise<string | null> {
+export async function getCurrentConfigRef(): Promise<ConfigRef | null> {
   const config = getConfig();
   const doc = getDynamoClient();
   const response = await withAuthRetry(() =>
@@ -140,16 +149,27 @@ export async function getCurrentConfigName(): Promise<string | null> {
       }),
     ),
   );
-  const name = (response.Item as { configName?: string } | undefined)?.configName;
-  return name && name.length > 0 ? name : null;
+  const item = response.Item as { configName?: string; region?: string } | undefined;
+  const name = item?.configName;
+  return name && name.length > 0 ? { name, region: regionOrHome(item?.region) } : null;
+}
+
+/** The current pointer's config name only (see {@link getCurrentConfigRef}). */
+export async function getCurrentConfigName(): Promise<string | null> {
+  return (await getCurrentConfigRef())?.name ?? null;
 }
 
 /**
  * Set the current endpoint config (the booth's "current" pointer). Writing the
  * single fixed-key item overwrites any previous value, so exactly one config is
- * ever current — selecting a new one automatically un-currents the old one.
+ * ever current — selecting a new one automatically un-currents the old one. The
+ * region is always written, so the invoke proxy and the scheduler drive the
+ * endpoint in that region.
  */
-export async function setCurrentConfigName(configName: string): Promise<void> {
+export async function setCurrentConfigName(
+  configName: string,
+  region?: string | null,
+): Promise<void> {
   const config = getConfig();
   const doc = getDynamoClient();
   await withAuthRetry(() =>
@@ -160,6 +180,7 @@ export async function setCurrentConfigName(configName: string): Promise<void> {
           pk: CURRENT_CONFIG_PK,
           sk: CURRENT_CONFIG_SK,
           configName,
+          region: regionOrHome(region),
           updatedAt: new Date().toISOString(),
         },
       }),
@@ -171,6 +192,8 @@ export async function setCurrentConfigName(configName: string): Promise<void> {
 export interface ManagedConfigItem {
   /** The SageMaker endpoint configuration name. */
   configName: string;
+  /** Region of the config (and of the endpoint created from it). */
+  region: string;
   /** ISO timestamp the config was added. */
   addedAt: string;
 }
@@ -193,18 +216,26 @@ export async function listManagedConfigs(): Promise<ManagedConfigItem[]> {
   );
   const items = (response.Items ?? []) as Array<{
     configName?: string;
+    region?: string;
     addedAt?: string;
   }>;
   return items
-    .filter((i): i is { configName: string; addedAt?: string } =>
+    .filter((i): i is { configName: string; region?: string; addedAt?: string } =>
       Boolean(i.configName),
     )
-    .map((i) => ({ configName: i.configName, addedAt: i.addedAt ?? "" }))
+    .map((i) => ({
+      configName: i.configName,
+      region: regionOrHome(i.region),
+      addedAt: i.addedAt ?? "",
+    }))
     .sort((a, b) => b.addedAt.localeCompare(a.addedAt));
 }
 
-/** Add an endpoint config to the curated managed list (idempotent upsert). */
-export async function addManagedConfig(configName: string): Promise<void> {
+/** Add an endpoint config (in `region`, default home) to the curated managed list (idempotent upsert). */
+export async function addManagedConfig(
+  configName: string,
+  region?: string | null,
+): Promise<void> {
   const config = getConfig();
   const doc = getDynamoClient();
   await withAuthRetry(() =>
@@ -213,8 +244,9 @@ export async function addManagedConfig(configName: string): Promise<void> {
         TableName: config.scheduleTable,
         Item: {
           pk: MANAGED_CONFIG_PK,
-          sk: managedConfigSk(configName),
+          sk: managedConfigSk(configName, region),
           configName,
+          region: regionOrHome(region),
           addedAt: new Date().toISOString(),
         },
       }),
@@ -222,15 +254,18 @@ export async function addManagedConfig(configName: string): Promise<void> {
   );
 }
 
-/** Remove an endpoint config from the curated managed list. */
-export async function removeManagedConfig(configName: string): Promise<void> {
+/** Remove an endpoint config (in `region`, default home) from the curated managed list. */
+export async function removeManagedConfig(
+  configName: string,
+  region?: string | null,
+): Promise<void> {
   const config = getConfig();
   const doc = getDynamoClient();
   await withAuthRetry(() =>
     doc.send(
       new DeleteCommand({
         TableName: config.scheduleTable,
-        Key: { pk: MANAGED_CONFIG_PK, sk: managedConfigSk(configName) },
+        Key: { pk: MANAGED_CONFIG_PK, sk: managedConfigSk(configName, region) },
       }),
     ),
   );

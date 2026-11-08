@@ -38,6 +38,8 @@ export interface UiRuntimeConfig {
   timezone: string;
   /** IAM-authenticated Lambda Function URL the SPA signs to invoke the endpoint. */
   invokeFunctionUrl: string;
+  /** Extra endpoint regions and their I/O buckets (`ui/src/api/regions.ts`). */
+  endpointRegions?: Array<{ region: string; ioBucket: string }>;
 }
 
 /** Props for {@link UiDeploymentConstruct}. */
@@ -120,6 +122,7 @@ export class UiDeploymentConstruct extends Construct {
         shareSignerUrl: config.shareSignerUrl,
         timezone: config.timezone,
         invokeFunctionUrl: config.invokeFunctionUrl,
+        endpointRegions: config.endpointRegions ?? [],
       },
       null,
       2,

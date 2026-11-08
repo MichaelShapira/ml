@@ -13,6 +13,12 @@ export interface IoBucketCorsProps {
    * via the L2 `Bucket` `cors` prop — we set it imperatively at deploy time.
    */
   readonly ioBucketName: string;
+  /**
+   * Region of the bucket when it is not the stack's (an extra endpoint
+   * region's I/O bucket). The SDK call is made in that region, because S3
+   * redirects instead of applying a cross-region PutBucketCors.
+   */
+  readonly bucketRegion?: string;
 
   /**
    * The CloudFront distribution domain (without scheme) that serves the SPA, e.g.
@@ -91,6 +97,7 @@ export class IoBucketCorsConstruct extends Construct {
       onCreate: {
         service: "S3",
         action: "putBucketCors",
+        ...(props.bucketRegion ? { region: props.bucketRegion } : {}),
         parameters: {
           Bucket: props.ioBucketName,
           CORSConfiguration: corsConfiguration,
@@ -102,6 +109,7 @@ export class IoBucketCorsConstruct extends Construct {
       onUpdate: {
         service: "S3",
         action: "putBucketCors",
+        ...(props.bucketRegion ? { region: props.bucketRegion } : {}),
         parameters: {
           Bucket: props.ioBucketName,
           CORSConfiguration: corsConfiguration,

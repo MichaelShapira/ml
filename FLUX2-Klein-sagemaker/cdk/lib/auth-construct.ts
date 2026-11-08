@@ -5,6 +5,7 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import type * as s3 from "aws-cdk-lib/aws-s3";
 import type * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { CURRENT_CONFIG_PK, PROMPT_OVERRIDE_PK } from "./data-construct";
+import { bucketArn, objectArn, sageMakerArn, type EndpointRegion } from "./endpoint-regions";
 
 /**
  * The S3 prefixes used by the existing FLUX.2 async inference endpoint.
@@ -57,6 +58,13 @@ export interface AuthConstructProps {
 
   /** Optional explicit name for the Cognito user pool. */
   readonly userPoolName?: string;
+
+  /**
+   * Extra regions the admin may pick endpoints from, each with its own I/O
+   * bucket. Both roles get the capture-flow S3 access on those buckets; the
+   * Admin_Role also gets endpoint management in those regions.
+   */
+  readonly extraRegions?: readonly EndpointRegion[];
 }
 
 /**
@@ -215,6 +223,34 @@ export class AuthConstruct extends Construct {
     )) {
       this.adminRole.addToPolicy(statement);
     }
+    // --- Extra endpoint regions ---------------------------------------------
+    // The booth sends each request to the I/O bucket of the current endpoint's
+    // region, so both roles need the same S3 access there as on the home bucket.
+    // Only admins manage endpoints, so only they get SageMaker in those regions.
+    const extraRegions = props.extraRegions ?? [];
+    if (extraRegions.length > 0) {
+      for (const role of [this.authenticatedRole, this.adminRole]) {
+        for (const statement of this.extraRegionCaptureStatements(stack, extraRegions)) {
+          role.addToPolicy(statement);
+        }
+      }
+      this.adminRole.addToPolicy(
+        new iam.PolicyStatement({
+          sid: "ManageEndpointsInExtraRegions",
+          effect: iam.Effect.ALLOW,
+          actions: [
+            "sagemaker:DescribeEndpoint",
+            "sagemaker:CreateEndpoint",
+            "sagemaker:DeleteEndpoint",
+            "sagemaker:AddTags",
+          ],
+          resources: extraRegions.flatMap((r) => [
+            sageMakerArn(stack, r.region, "endpoint", "*"),
+            sageMakerArn(stack, r.region, "endpoint-config", "*"),
+          ]),
+        }),
+      );
+    }
 
     // --- Cognito admin group -> Admin_Role ---------------------------------
     // Setting the group's roleArn lets the identity pool's Token-type role
@@ -352,6 +388,44 @@ export class AuthConstruct extends Construct {
         conditions: {
           "ForAllValues:StringEquals": {
             "dynamodb:LeadingKeys": [CURRENT_CONFIG_PK],
+          },
+        },
+      }),
+    ];
+  }
+
+  /**
+   * Capture-flow S3 access on the extra regions' I/O buckets: the same
+   * inputs-put / outputs-get / prefix-scoped list as on the home bucket.
+   */
+  private extraRegionCaptureStatements(
+    stack: cdk.Stack,
+    regions: readonly EndpointRegion[],
+  ): iam.PolicyStatement[] {
+    return [
+      new iam.PolicyStatement({
+        sid: "PutInputObjectsExtraRegions",
+        effect: iam.Effect.ALLOW,
+        actions: ["s3:PutObject"],
+        resources: regions.map((r) => objectArn(stack, r.ioBucketName, `${INPUTS_PREFIX}*`)),
+      }),
+      new iam.PolicyStatement({
+        sid: "GetOutputObjectsExtraRegions",
+        effect: iam.Effect.ALLOW,
+        actions: ["s3:GetObject"],
+        resources: regions.flatMap((r) => [
+          objectArn(stack, r.ioBucketName, `${OUTPUTS_PREFIX}*`),
+          objectArn(stack, r.ioBucketName, `${FAILURES_PREFIX}*`),
+        ]),
+      }),
+      new iam.PolicyStatement({
+        sid: "ListOutputPrefixesExtraRegions",
+        effect: iam.Effect.ALLOW,
+        actions: ["s3:ListBucket"],
+        resources: regions.map((r) => bucketArn(stack, r.ioBucketName)),
+        conditions: {
+          StringLike: {
+            "s3:prefix": [`${OUTPUTS_PREFIX}*`, `${FAILURES_PREFIX}*`],
           },
         },
       }),

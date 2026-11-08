@@ -22,7 +22,8 @@ import {
 import { getSageMakerClient, withAuthRetry } from "./awsClients";
 import { EndpointStatus, mapStatus, canStart, canStop } from "./statusMap";
 import { setModelFamilyFromConfig } from "./modelFamily";
-import { putWorkingHours, listWorkingHours, deleteWorkingHours, getCurrentConfigName, setCurrentConfigName, listManagedConfigs, addManagedConfig, removeManagedConfig } from "./schedule";
+import { putWorkingHours, listWorkingHours, deleteWorkingHours, getCurrentConfigName, getCurrentConfigRef, setCurrentConfigName, listManagedConfigs, addManagedConfig, removeManagedConfig } from "./schedule";
+import { configId, regionOrHome } from "./regions";
 import {
   nowInScheduleTz,
   addMinutesCapped,
@@ -60,6 +61,10 @@ export interface EndpointSummary {
  */
 export interface EndpointConfigSummary {
   name: string;
+  /** Region of the config and its endpoint. */
+  region: string;
+  /** `name` in the home region, `name@region` elsewhere (unique across regions). */
+  id: string;
   status: EndpointStatus;
   isCurrent: boolean;
 }
@@ -121,8 +126,8 @@ function isConfigError(err: unknown): boolean {
  * An empty account yields `[]`, which the UI renders as "no endpoints
  * available" (Requirement 15.5).
  */
-export async function listEndpoints(): Promise<EndpointSummary[]> {
-  const sm = getSageMakerClient();
+export async function listEndpoints(region?: string): Promise<EndpointSummary[]> {
+  const sm = getSageMakerClient(regionOrHome(region));
   try {
     const response = await withAuthRetry(() =>
       sm.send(new ListEndpointsCommand({ MaxResults: 100 })),
@@ -144,12 +149,12 @@ export async function listEndpoints(): Promise<EndpointSummary[]> {
 }
 
 /**
- * List ALL endpoint configuration names in the account (for the admin's
- * "add config" autocomplete picker). Throws {@link EndpointConfigError} on a
- * credentials/region failure.
+ * List ALL endpoint configuration names in the account in `region` (default:
+ * home) for the admin's "add config" autocomplete picker. Throws
+ * {@link EndpointConfigError} on a credentials/region failure.
  */
-export async function listAllConfigNames(): Promise<string[]> {
-  const sm = getSageMakerClient();
+export async function listAllConfigNames(region?: string): Promise<string[]> {
+  const sm = getSageMakerClient(regionOrHome(region));
   try {
     const response = await withAuthRetry(() =>
       sm.send(new ListEndpointConfigsCommand({ MaxResults: 100 })),
@@ -181,35 +186,38 @@ export async function listAllConfigNames(): Promise<string[]> {
  */
 export async function listManagedConfigsWithStatus(): Promise<EndpointConfigSummary[]> {
   const managed = await listManagedConfigs();
-  const names = managed.map((m) => m.configName);
-  if (names.length === 0) {
+  if (managed.length === 0) {
     return [];
   }
+  const sameConfig = (m: { configName: string; region: string }, ref: { name: string; region: string }) =>
+    m.configName === ref.name && m.region === ref.region;
 
-  let current = await getCurrentConfigName();
-  if (!current || !names.includes(current)) {
-    current = names[0];
+  let current = await getCurrentConfigRef();
+  if (!current || !managed.some((m) => sameConfig(m, current!))) {
+    current = { name: managed[0].configName, region: managed[0].region };
     try {
-      await setCurrentConfigName(current);
+      await setCurrentConfigName(current.name, current.region);
     } catch {
       // Non-fatal: the badge just may not persist.
     }
   }
-  // Keep the booth's prompt dialect in step with the current config.
-  setModelFamilyFromConfig(current);
+  // Keep the booth's prompt dialect and endpoint region in step with the current config.
+  setModelFamilyFromConfig(current.name, current.region);
 
   return Promise.all(
-    names.map(async (name) => ({
-      name,
-      status: await describeEndpointStatus(name),
-      isCurrent: name === current,
+    managed.map(async (m) => ({
+      name: m.configName,
+      region: m.region,
+      id: configId({ name: m.configName, region: m.region }),
+      status: await describeEndpointStatus(m.configName, m.region),
+      isCurrent: sameConfig(m, current!),
     })),
   );
 }
 
-/** Add an endpoint config to the curated managed list. */
-export async function addConfig(configName: string): Promise<void> {
-  await addManagedConfig(configName);
+/** Add an endpoint config (in `region`, default home) to the curated managed list. */
+export async function addConfig(configName: string, region?: string): Promise<void> {
+  await addManagedConfig(configName, regionOrHome(region));
 }
 
 /**
@@ -217,17 +225,18 @@ export async function addConfig(configName: string): Promise<void> {
  * current config, the pointer is left as-is; the next list will auto-pick a new
  * current from the remaining managed configs.
  */
-export async function removeConfig(configName: string): Promise<void> {
-  await removeManagedConfig(configName);
+export async function removeConfig(configName: string, region?: string): Promise<void> {
+  await removeManagedConfig(configName, regionOrHome(region));
 }
 
 /**
- * Make `configName` the booth's current config. Writing the single fixed-key
- * pointer overwrites any previous value, so exactly one config is ever current.
+ * Make `configName` (in `region`, default home) the booth's current config.
+ * Writing the single fixed-key pointer overwrites any previous value, so
+ * exactly one config is ever current.
  */
-export async function makeConfigCurrent(configName: string): Promise<void> {
-  await setCurrentConfigName(configName);
-  setModelFamilyFromConfig(configName);
+export async function makeConfigCurrent(configName: string, region?: string): Promise<void> {
+  await setCurrentConfigName(configName, regionOrHome(region));
+  setModelFamilyFromConfig(configName, regionOrHome(region));
 }
 
 /** Read the booth's current config name (or null when unset). */
@@ -242,8 +251,9 @@ export async function getCurrentConfig(): Promise<string | null> {
  */
 export async function describeEndpointStatus(
   name: string,
+  region?: string,
 ): Promise<EndpointStatus> {
-  const sm = getSageMakerClient();
+  const sm = getSageMakerClient(regionOrHome(region));
   try {
     const response = await withAuthRetry(() =>
       sm.send(new DescribeEndpointCommand({ EndpointName: name })),
@@ -268,12 +278,12 @@ export interface EndpointActionResult {
  * Rejected with "endpoint already exists" when the endpoint is already deployed
  * (Requirement 17.3).
  */
-export async function startEndpoint(name: string): Promise<EndpointActionResult> {
-  const status = await describeEndpointStatus(name);
+export async function startEndpoint(name: string, region?: string): Promise<EndpointActionResult> {
+  const status = await describeEndpointStatus(name, region);
   if (!canStart(status)) {
     return { ok: false, message: "Endpoint already exists." };
   }
-  const sm = getSageMakerClient();
+  const sm = getSageMakerClient(regionOrHome(region));
   await withAuthRetry(() =>
     sm.send(
       new CreateEndpointCommand({
@@ -332,12 +342,12 @@ export async function startEndpoint(name: string): Promise<EndpointActionResult>
  * responsible for requiring an explicit confirm before calling this
  * (Requirement 18.2).
  */
-export async function stopEndpoint(name: string): Promise<EndpointActionResult> {
-  const status = await describeEndpointStatus(name);
+export async function stopEndpoint(name: string, region?: string): Promise<EndpointActionResult> {
+  const status = await describeEndpointStatus(name, region);
   if (!canStop(status)) {
     return { ok: false, message: "No endpoint to delete." };
   }
-  const sm = getSageMakerClient();
+  const sm = getSageMakerClient(regionOrHome(region));
   await withAuthRetry(() =>
     sm.send(new DeleteEndpointCommand({ EndpointName: name })),
   );

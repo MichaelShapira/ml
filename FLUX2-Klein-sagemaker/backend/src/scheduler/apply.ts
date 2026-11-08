@@ -28,6 +28,12 @@
  * The "no schedule today" path is a normal stopped desired-state and never
  * throws.
  *
+ * Regions: the current-config pointer may name another region (an endpoint the
+ * admin added from an extra endpoint region). The scheduler then describes,
+ * creates and deletes the endpoint in that region. A pointer without a region
+ * means this Lambda's region. Regions outside `ENDPOINT_REGIONS` are refused
+ * (no action, logged), matching the invoke proxy.
+ *
  * The core {@link reconcile} function takes injected SageMaker + DynamoDB
  * clients and an explicit wall-clock, so it is unit/integration testable with
  * `aws-sdk-client-mock`. The {@link handler} resolves config + wall-clock from
@@ -69,12 +75,19 @@ export interface SchedulerConfig {
   timezone: string;
   /** EndpointConfig name to recreate the endpoint from on `CreateEndpoint`. */
   endpointConfigName: string;
+  /** This Lambda's (the stack's) region. */
+  homeRegion?: string;
+  /** Extra regions the current config may point at (from `ENDPOINT_REGIONS` keys). */
+  extraRegions?: string[];
 }
 
 /** The AWS SDK clients the scheduler needs; injected for testability. */
 export interface ReconcileClients {
+  /** SageMaker client for the home region. */
   sagemaker: SageMakerClient;
   dynamodb: DynamoDBClient;
+  /** SageMaker client for another endpoint region (defaults to one real client per region). */
+  sagemakerFor?: (region: string) => SageMakerClient;
 }
 
 /** A wall-clock instant in the configured timezone. */
@@ -102,6 +115,8 @@ export interface ReconcileResult {
   day: string;
   /** The wall-clock time used. */
   time: string;
+  /** Region of the managed endpoint; `undefined` = the home region. */
+  region?: string;
 }
 
 /** Input event shape for the EventBridge target. */
@@ -136,7 +151,24 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env): SchedulerCo
     scheduleTable: env.SCHEDULE_TABLE ?? "",
     timezone: env.TIMEZONE ?? DEFAULT_TIMEZONE,
     endpointConfigName: env.ENDPOINT_CONFIG_NAME ?? "",
+    homeRegion: env.AWS_REGION,
+    extraRegions: parseExtraRegions(env.ENDPOINT_REGIONS),
   };
+}
+
+/** Region names from `ENDPOINT_REGIONS` (`{ "<region>": "<bucket>" }`); malformed = none. */
+export function parseExtraRegions(value: string | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? Object.keys(parsed as Record<string, unknown>)
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -278,7 +310,7 @@ async function readDesiredRunning(
 async function resolveCurrentEndpoint(
   dynamodb: DynamoDBClient,
   config: SchedulerConfig,
-): Promise<{ endpointName: string; endpointConfigName: string }> {
+): Promise<{ endpointName: string; endpointConfigName: string; region?: string }> {
   try {
     const key = currentConfigKey();
     const response = await dynamodb.send(
@@ -289,7 +321,10 @@ async function resolveCurrentEndpoint(
     );
     const name = readString(response.Item, "configName");
     if (name && name.length > 0) {
-      return { endpointName: name, endpointConfigName: name };
+      const region = readString(response.Item, "region");
+      return region && region.length > 0 && region !== config.homeRegion
+        ? { endpointName: name, endpointConfigName: name, region }
+        : { endpointName: name, endpointConfigName: name };
     }
   } catch {
     // Fall through to the configured defaults.
@@ -323,19 +358,40 @@ export async function reconcile(
   );
 
   // Resolve which endpoint/config is currently selected by the admin.
-  const { endpointName, endpointConfigName } = await resolveCurrentEndpoint(
+  const { endpointName, endpointConfigName, region } = await resolveCurrentEndpoint(
     clients.dynamodb,
     config,
   );
 
-  const status = await describeStatus(clients.sagemaker, endpointName);
+  if (region && !(config.extraRegions ?? []).includes(region)) {
+    // Not one of the stack's endpoint regions: the role could not act there
+    // anyway, so say so instead of failing every tick.
+    console.error("[scheduler] current config is in a region the booth is not set up for", {
+      endpointName,
+      region,
+    });
+    return {
+      action: "NONE",
+      desiredRunning,
+      status: EndpointStatus.NOT_DEPLOYED,
+      hasSchedule,
+      day: now.day,
+      time: now.time,
+      region,
+    };
+  }
+  const sagemaker = region
+    ? (clients.sagemakerFor ?? defaultSageMakerFor)(region)
+    : clients.sagemaker;
+
+  const status = await describeStatus(sagemaker, endpointName);
 
   let action: ReconcileAction = "NONE";
 
   if (desiredRunning && canStart(status)) {
     // Inside the window and the endpoint is not deployed → create it.
     // `canStart(status)` is true iff status === NOT_DEPLOYED.
-    await clients.sagemaker.send(
+    await sagemaker.send(
       new CreateEndpointCommand({
         EndpointName: endpointName,
         EndpointConfigName: endpointConfigName,
@@ -349,7 +405,7 @@ export async function reconcile(
     // Outside the window and the endpoint is in service → delete it. We act
     // only on IN_SERVICE, leaving transitional CREATING/DELETING/FAILED states
     // untouched so the reconcile stays idempotent and never thrashes.
-    await clients.sagemaker.send(
+    await sagemaker.send(
       new DeleteEndpointCommand({ EndpointName: endpointName }),
     );
     action = "DELETE";
@@ -362,6 +418,7 @@ export async function reconcile(
     hasSchedule,
     day: now.day,
     time: now.time,
+    ...(region ? { region } : {}),
   };
 
   console.info("[scheduler] reconcile decision", {
@@ -372,6 +429,17 @@ export async function reconcile(
   });
 
   return result;
+}
+
+/** One cached SageMaker client per extra endpoint region (Lambda containers are reused). */
+const sageMakerClients = new Map<string, SageMakerClient>();
+function defaultSageMakerFor(region: string): SageMakerClient {
+  let client = sageMakerClients.get(region);
+  if (!client) {
+    client = new SageMakerClient({ region });
+    sageMakerClients.set(region, client);
+  }
+  return client;
 }
 
 /** Default real AWS SDK clients, constructed lazily so importing is side-effect free. */

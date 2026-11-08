@@ -6,6 +6,7 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import { NodejsFunction, OutputFormat } from "aws-cdk-lib/aws-lambda-nodejs";
 import * as logs from "aws-cdk-lib/aws-logs";
 import type { DataConstruct } from "./data-construct";
+import { sageMakerArn, type EndpointRegion } from "./endpoint-regions";
 
 /**
  * Absolute path to the `Invoke_Proxy` Lambda source
@@ -49,6 +50,8 @@ export interface InvokeConstructProps {
    * to the Function URL, which (unlike the SageMaker runtime API) supports CORS.
    */
   readonly allowedOrigins: string[];
+  /** Extra endpoint regions (and their I/O buckets) the proxy may invoke in. */
+  readonly extraRegions?: readonly EndpointRegion[];
 }
 
 /**
@@ -112,6 +115,9 @@ export class InvokeConstruct extends Construct {
             resource: "endpoint",
             resourceName: "*",
           }),
+          ...(props.extraRegions ?? []).map((r) =>
+            sageMakerArn(Stack.of(this), r.region, "endpoint", "*"),
+          ),
         ],
       }),
     );
@@ -149,6 +155,10 @@ export class InvokeConstruct extends Construct {
         IO_BUCKET: data.ioBucket.bucketName,
         // Resolve the admin-selected current endpoint config from this table.
         SCHEDULE_TABLE: data.scheduleTable.tableName,
+        // { "<region>": "<io bucket>" } for each extra endpoint region.
+        ENDPOINT_REGIONS: Stack.of(this).toJsonString(
+          Object.fromEntries((props.extraRegions ?? []).map((r) => [r.region, r.ioBucketName])),
+        ),
       },
       bundling: {
         target: "node20",

@@ -1,5 +1,5 @@
 import * as path from "path";
-import { Duration, RemovalPolicy } from "aws-cdk-lib";
+import { Duration, RemovalPolicy, Stack } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -8,6 +8,7 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
 import type { DataConstruct } from "./data-construct";
+import { sageMakerArn, type EndpointRegion } from "./endpoint-regions";
 
 /** Default kiosk timezone used to evaluate wall-clock Working_Hours. */
 const DEFAULT_TIMEZONE = "America/Los_Angeles";
@@ -82,6 +83,8 @@ export interface SchedulerConstructProps {
    * @default "America/Los_Angeles"
    */
   readonly timezone?: string;
+  /** Extra endpoint regions the current config may point at. */
+  readonly extraRegions?: readonly EndpointRegion[];
 }
 
 /**
@@ -152,6 +155,25 @@ export class SchedulerConstruct extends Construct {
     )) {
       this.schedulerRole.addToPolicy(statement);
     }
+    const extraRegions = props.extraRegions ?? [];
+    if (extraRegions.length > 0) {
+      this.schedulerRole.addToPolicy(
+        new iam.PolicyStatement({
+          sid: "ManageEndpointInExtraRegions",
+          effect: iam.Effect.ALLOW,
+          actions: [
+            "sagemaker:DescribeEndpoint",
+            "sagemaker:CreateEndpoint",
+            "sagemaker:DeleteEndpoint",
+            "sagemaker:AddTags",
+          ],
+          resources: extraRegions.flatMap((r) => [
+            sageMakerArn(Stack.of(this), r.region, "endpoint", "*"),
+            sageMakerArn(Stack.of(this), r.region, "endpoint-config", "*"),
+          ]),
+        }),
+      );
+    }
 
     // --- Log group (explicit, DESTROY) -------------------------------------
     // CloudWatch log groups default to RETAIN; create one explicitly with
@@ -184,6 +206,10 @@ export class SchedulerConstruct extends Construct {
         TIMEZONE: timezone,
         // Endpoint configuration name passed to CreateEndpoint on start.
         ENDPOINT_CONFIG_NAME: props.endpointConfigName,
+        // { "<region>": "<io bucket>" }: the regions the current config may be in.
+        ENDPOINT_REGIONS: Stack.of(this).toJsonString(
+          Object.fromEntries(extraRegions.map((r) => [r.region, r.ioBucketName])),
+        ),
       },
       bundling: {
         target: "node20",

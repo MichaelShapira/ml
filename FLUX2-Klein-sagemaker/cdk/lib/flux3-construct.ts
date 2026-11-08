@@ -4,6 +4,7 @@ import type * as s3 from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 
 import { FAILURES_PREFIX, INPUTS_PREFIX, OUTPUTS_PREFIX } from "./data-construct";
+import { bucketArn, objectArn, type EndpointRegion } from "./endpoint-regions";
 
 /**
  * S3 prefix (in the async I/O bucket) holding everything FLUX 3 Image Klein
@@ -28,6 +29,11 @@ export const DLC_ACCOUNT = "763104351884";
 export interface Flux3ConstructProps {
   /** The async I/O bucket (referenced or created by the data construct). */
   readonly ioBucket: s3.IBucket;
+  /**
+   * Extra regions the booth may run the FLUX 3 endpoint in, each with its own
+   * I/O bucket (see endpoint-regions.ts). The home region is always covered.
+   */
+  readonly extraRegions?: readonly EndpointRegion[];
 }
 
 /**
@@ -52,6 +58,8 @@ export class Flux3Construct extends Construct {
     super(scope, id);
     const stack = Stack.of(this);
     const bucket = props.ioBucket;
+    const extraRegions = props.extraRegions ?? [];
+    const regions = [stack.region, ...extraRegions.map((r) => r.region)];
 
     this.role = new iam.Role(this, "SageMakerRole", {
       description:
@@ -95,16 +103,16 @@ export class Flux3Construct extends Construct {
       new iam.PolicyStatement({
         sid: "PullRayServeDlc",
         actions: ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability"],
-        resources: [`arn:${stack.partition}:ecr:${stack.region}:${DLC_ACCOUNT}:repository/ray`],
+        resources: regions.map((r) => `arn:${stack.partition}:ecr:${r}:${DLC_ACCOUNT}:repository/ray`),
       }),
       // Container and job logs.
       new iam.PolicyStatement({
         sid: "WriteSageMakerLogs",
         actions: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogStreams"],
-        resources: [
-          `arn:${stack.partition}:logs:${stack.region}:${stack.account}:log-group:/aws/sagemaker/*`,
-          `arn:${stack.partition}:logs:${stack.region}:${stack.account}:log-group:/aws/sagemaker/*:log-stream:*`,
-        ],
+        resources: regions.flatMap((r) => [
+          `arn:${stack.partition}:logs:${r}:${stack.account}:log-group:/aws/sagemaker/*`,
+          `arn:${stack.partition}:logs:${r}:${stack.account}:log-group:/aws/sagemaker/*:log-stream:*`,
+        ]),
       }),
       // Endpoint invocation / utilisation metrics. PutMetricData has no
       // resource scoping.
@@ -123,6 +131,27 @@ export class Flux3Construct extends Construct {
         ],
       }),
     ];
+    // The same endpoint in another region reads its model data and requests
+    // from, and writes its results to, that region's bucket. deploy.sh copies
+    // the staged weights there with the operator's credentials, so the role
+    // gets no write access to the model prefix outside the home region.
+    for (const extra of extraRegions) {
+      const b = extra.ioBucketName;
+      statements.push(
+        new iam.PolicyStatement({
+          actions: ["s3:GetObject"],
+          resources: [objectArn(stack, b, `${FLUX3_PREFIX}*`), objectArn(stack, b, `${INPUTS_PREFIX}*`)],
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:PutObject", "s3:AbortMultipartUpload"],
+          resources: [objectArn(stack, b, `${OUTPUTS_PREFIX}*`), objectArn(stack, b, `${FAILURES_PREFIX}*`)],
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:ListBucket"],
+          resources: [bucketArn(stack, b)],
+        }),
+      );
+    }
     for (const statement of statements) {
       this.role.addToPolicy(statement);
     }

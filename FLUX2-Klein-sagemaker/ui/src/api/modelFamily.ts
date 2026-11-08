@@ -17,7 +17,9 @@
  * (pk = sk = "CONFIG#CURRENT"). Every signed-in role may GetItem that one item
  * (see `auth-construct.ts`, statement ReadCurrentConfig), so the visitor's
  * booth reads it before each generation; the invoke proxy resolves the same
- * pointer server-side, so the request and the endpoint stay in step.
+ * pointer server-side, so the request and the endpoint stay in step. The same
+ * read also yields the config's region (see `regions.ts`), which picks the I/O
+ * bucket the request goes to.
  */
 import { GetCommand } from "@aws-sdk/lib-dynamodb";
 
@@ -48,6 +50,18 @@ export function modelFamilyLabel(family: ModelFamily): string {
 /** Last known family; FLUX.2 until the pointer has been read. */
 let currentFamily: ModelFamily = "flux2";
 
+/**
+ * Last known region of the current config; `null` (the home region) until the
+ * pointer has been read or for a pointer written before regions existed. The
+ * booth uploads each request to this region's I/O bucket.
+ */
+let currentRegion: string | null = null;
+
+/** The last known region of the current config, or `null` for the home region (no I/O). */
+export function getCurrentEndpointRegion(): string | null {
+  return currentRegion;
+}
+
 /** The last known family of the current config (no I/O). */
 export function getModelFamily(): ModelFamily {
   return currentFamily;
@@ -57,8 +71,12 @@ export function getModelFamily(): ModelFamily {
  * Record the family of `configName` as current. Called by the admin panel when
  * it makes a config current, so the next generation uses it without a re-read.
  */
-export function setModelFamilyFromConfig(configName: string | null | undefined): ModelFamily {
+export function setModelFamilyFromConfig(
+  configName: string | null | undefined,
+  region?: string | null,
+): ModelFamily {
   currentFamily = modelFamilyForConfig(configName);
+  currentRegion = typeof region === "string" && region.length > 0 ? region : null;
   return currentFamily;
 }
 
@@ -69,20 +87,34 @@ export function setModelFamilyFromConfig(configName: string | null | undefined):
  * generation.
  */
 export async function refreshModelFamily(): Promise<ModelFamily> {
+  return (await refreshCurrentTarget()).family;
+}
+
+/**
+ * Re-read the current-config pointer and return both the family and the
+ * region of the current config (`null` = home region). Same best-effort rules
+ * as {@link refreshModelFamily}: on error the last known values are returned.
+ */
+export async function refreshCurrentTarget(): Promise<{ family: ModelFamily; region: string | null }> {
   try {
     const response = await getDynamoClient().send(
       new GetCommand({
         TableName: getConfig().scheduleTable,
         Key: CURRENT_CONFIG_KEY,
-        ProjectionExpression: "configName",
+        // REGION is a DynamoDB reserved word.
+        ProjectionExpression: "configName, #region",
+        ExpressionAttributeNames: { "#region": "region" },
       }),
     );
-    const name = (response.Item as { configName?: unknown } | undefined)?.configName;
-    if (typeof name === "string" && name.length > 0) {
-      currentFamily = modelFamilyForConfig(name);
+    const item = response.Item as { configName?: unknown; region?: unknown } | undefined;
+    if (typeof item?.configName === "string" && item.configName.length > 0) {
+      setModelFamilyFromConfig(
+        item.configName,
+        typeof item.region === "string" ? item.region : null,
+      );
     }
   } catch {
-    // Keep the last known family.
+    // Keep the last known family and region.
   }
-  return currentFamily;
+  return { family: currentFamily, region: currentRegion };
 }
