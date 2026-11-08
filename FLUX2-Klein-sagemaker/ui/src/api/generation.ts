@@ -38,6 +38,7 @@ import {
 } from "./awsClients";
 import { invokeEndpointAsyncViaProxy } from "./invokeProxy";
 import { buildAsyncRequest, buildMergeRequest } from "./requestBuilder";
+import { getModelFamily, refreshModelFamily, type ModelFamily } from "./modelFamily";
 import { decidePoll, POLL_TIMEOUT_MS, type PollDecision } from "./pollDecision";
 
 /** S3 key prefixes used by the existing async inference flow. */
@@ -63,6 +64,11 @@ export interface SubmitMergeRequest {
    * fetched and re-encoded to base64 before submission.
    */
   images: string[];
+  /**
+   * Model family the prompt was written for. The caller builds the merge
+   * prompt, so it passes the family it used; defaults to the last known one.
+   */
+  family?: ModelFamily;
 }
 
 /** Handle returned by {@link submitGeneration}, fed back into {@link pollGeneration}. */
@@ -179,7 +185,10 @@ export async function submitGeneration(req: SubmitRequest): Promise<SubmitResult
     throw new Error("submitGeneration: photo is required");
   }
 
-  const asyncRequest = buildAsyncRequest({ effectId: req.effectId, photo: req.photo });
+  // Prompt and sampling depend on which model the current config serves; read
+  // the pointer now (best-effort) so a config switch applies to this request.
+  const family = await refreshModelFamily();
+  const asyncRequest = buildAsyncRequest({ effectId: req.effectId, photo: req.photo, family });
   return submitAsyncRequest(JSON.stringify(asyncRequest));
 }
 
@@ -221,7 +230,11 @@ export async function submitMerge(req: SubmitMergeRequest): Promise<SubmitResult
   }
 
   const images = await Promise.all(req.images.map(toBase64Payload));
-  const asyncRequest = buildMergeRequest({ prompt: req.prompt, images });
+  const asyncRequest = buildMergeRequest({
+    prompt: req.prompt,
+    images,
+    family: req.family ?? getModelFamily(),
+  });
   return submitAsyncRequest(JSON.stringify(asyncRequest));
 }
 

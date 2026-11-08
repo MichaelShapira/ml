@@ -29,6 +29,7 @@ import { CameraView } from "./CameraView";
 import { ReviewScreen } from "./ReviewScreen";
 import { StudioView, type StudioPhase, type StudioResults } from "./StudioView";
 import { buildMergePrompt } from "./effects";
+import { refreshModelFamily } from "../api/modelFamily";
 import { useLayoutMode } from "./useLayoutMode";
 import { LOADING_MESSAGES, messageForElapsed } from "./loadingMessages";
 import {
@@ -164,9 +165,12 @@ export function BoothFlow({ isAuthenticated, isAdmin = false }: BoothFlowProps) 
           }
           // By convention the background result is image 1 and the character
           // result is image 2 (the merge prompt references them in that order).
+          // The merge prompt dialect follows the current endpoint's model.
+          const family = await refreshModelFamily();
           handle = await submitMerge({
-            prompt: buildMergePrompt(bg.effectId, person.effectId),
+            prompt: buildMergePrompt(bg.effectId, person.effectId, family),
             images: [bg.image, person.image],
+            family,
           });
         } else {
           handle = await submitGeneration({

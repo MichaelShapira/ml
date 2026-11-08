@@ -9,16 +9,24 @@
  */
 
 import { getPromptForEffect, getRequestOverridesForEffect } from "../booth/effects";
+import type { ModelFamily } from "./modelFamily";
 
-/** A single JSON inference request submitted to the FLUX2_Endpoint. */
+/**
+ * A single JSON inference request submitted to the booth's current endpoint.
+ * Both endpoints (FLUX.2 `code/inference.py` and FLUX 3 `flux3_app.py`) accept
+ * this shape and return PNG bytes.
+ */
 export interface AsyncRequest {
   /** Prompt text mapped from the selected effect. */
   inputs: string;
   /** Base64-encoded reference image(s); the booth always sends `[photo]`. */
   images: string[];
-  /** Denoising steps, clamped to the booth range [4, 20]. */
+  /** Denoising steps, clamped to the family's range (see {@link SAMPLING}). */
   num_inference_steps: number;
-  /** Guidance scale, clamped to the booth range [1, 10]. */
+  /**
+   * Guidance scale, clamped to the family's range. FLUX 3 Image Klein is
+   * guidance-distilled (CFG 1); its endpoint accepts and ignores the field.
+   */
   guidance_scale: number;
   /**
    * Optional output width in px. Omitted for most effects (the endpoint then
@@ -32,14 +40,36 @@ export interface AsyncRequest {
   seed?: number;
 }
 
-/** Inclusive booth bounds for `num_inference_steps`. */
+/** Inclusive booth bounds for `num_inference_steps` (FLUX.2). */
 export const STEPS_RANGE = { min: 4, max: 20 } as const;
 
-/** Inclusive booth bounds for `guidance_scale`. */
+/** Inclusive booth bounds for `guidance_scale` (FLUX.2). */
 export const GUIDANCE_RANGE = { min: 1, max: 10 } as const;
 
-/** Booth defaults applied when a caller omits a parameter. */
+/** Booth defaults applied when a caller omits a parameter (FLUX.2). */
 export const DEFAULTS = { num_inference_steps: 6, guidance_scale: 2.5 } as const;
+
+/** Sampling defaults and bounds for one model family. */
+export interface SamplingPolicy {
+  defaults: { num_inference_steps: number; guidance_scale: number };
+  steps: { min: number; max: number };
+  guidance: { min: number; max: number };
+}
+
+/**
+ * Per-family sampling. FLUX.2 keeps the booth's tuned 6 steps / guidance 2.5.
+ * FLUX 3 Image Klein (distilled) is trained for 4 to 16 steps with 16 as the
+ * default, and has no classifier-free guidance (CFG 1), per Black Forest Labs'
+ * model card and docs.bfl.ai.
+ */
+export const SAMPLING: Readonly<Record<ModelFamily, SamplingPolicy>> = {
+  flux2: { defaults: DEFAULTS, steps: STEPS_RANGE, guidance: GUIDANCE_RANGE },
+  flux3: {
+    defaults: { num_inference_steps: 16, guidance_scale: 1 },
+    steps: { min: 4, max: 16 },
+    guidance: { min: 1, max: 1 },
+  },
+};
 
 /** Parameters for {@link buildAsyncRequest}. */
 export interface BuildAsyncRequestParams {
@@ -47,6 +77,8 @@ export interface BuildAsyncRequestParams {
   effectId: string;
   /** The captured photo as a base64-encoded PNG/JPEG string. */
   photo: string;
+  /** Model family of the current endpoint (default `flux2`). */
+  family?: ModelFamily;
   /** Optional override for `num_inference_steps`; defaults to {@link DEFAULTS}. */
   steps?: number;
   /** Optional override for `guidance_scale`; defaults to {@link DEFAULTS}. */
@@ -88,29 +120,33 @@ function resolveInRange(
 export function buildAsyncRequest({
   effectId,
   photo,
+  family = "flux2",
   steps,
   guidance,
   seed,
 }: BuildAsyncRequestParams): AsyncRequest {
   // Per-effect overrides (output size / sampling). Precedence for steps and
-  // guidance: explicit caller argument > effect override > booth default.
+  // guidance: explicit caller argument > effect override > family default.
+  // Effect sampling overrides were tuned for FLUX.2, so FLUX 3 ignores them.
   const overrides = getRequestOverridesForEffect(effectId);
+  const sampling = SAMPLING[family];
+  const tuned = family === "flux2" ? overrides : {};
 
   const request: AsyncRequest = {
-    inputs: getPromptForEffect(effectId),
+    inputs: getPromptForEffect(effectId, family),
     // Strip any data-URI prefix so the endpoint receives raw base64 only.
     images: [stripDataUriPrefix(photo)],
     num_inference_steps: resolveInRange(
       steps,
-      overrides.steps ?? DEFAULTS.num_inference_steps,
-      STEPS_RANGE.min,
-      STEPS_RANGE.max,
+      tuned.steps ?? sampling.defaults.num_inference_steps,
+      sampling.steps.min,
+      sampling.steps.max,
     ),
     guidance_scale: resolveInRange(
       guidance,
-      overrides.guidance ?? DEFAULTS.guidance_scale,
-      GUIDANCE_RANGE.min,
-      GUIDANCE_RANGE.max,
+      tuned.guidance ?? sampling.defaults.guidance_scale,
+      sampling.guidance.min,
+      sampling.guidance.max,
     ),
   };
   // Pass an explicit output size only when the effect requests one; the
@@ -137,9 +173,11 @@ export interface BuildMergeRequestParams {
    * endpoint accepts up to 4 references; the booth merge uses exactly 2.
    */
   images: string[];
-  /** Optional override for `num_inference_steps`; defaults to {@link DEFAULTS}. */
+  /** Model family of the current endpoint (default `flux2`). */
+  family?: ModelFamily;
+  /** Optional override for `num_inference_steps`; defaults to the family default. */
   steps?: number;
-  /** Optional override for `guidance_scale`; defaults to {@link DEFAULTS}. */
+  /** Optional override for `guidance_scale`; defaults to the family default. */
   guidance?: number;
   /** Optional fixed seed; passed through unchanged when provided. */
   seed?: number;
@@ -155,24 +193,26 @@ export interface BuildMergeRequestParams {
 export function buildMergeRequest({
   prompt,
   images,
+  family = "flux2",
   steps,
   guidance,
   seed,
 }: BuildMergeRequestParams): AsyncRequest {
+  const sampling = SAMPLING[family];
   const request: AsyncRequest = {
     inputs: prompt,
     images: images.map(stripDataUriPrefix),
     num_inference_steps: resolveInRange(
       steps,
-      DEFAULTS.num_inference_steps,
-      STEPS_RANGE.min,
-      STEPS_RANGE.max,
+      sampling.defaults.num_inference_steps,
+      sampling.steps.min,
+      sampling.steps.max,
     ),
     guidance_scale: resolveInRange(
       guidance,
-      DEFAULTS.guidance_scale,
-      GUIDANCE_RANGE.min,
-      GUIDANCE_RANGE.max,
+      sampling.defaults.guidance_scale,
+      sampling.guidance.min,
+      sampling.guidance.max,
     ),
   };
   if (seed !== undefined) {

@@ -21,6 +21,7 @@ import {
   getPromptForEffect,
 } from "./effects";
 import { savePromptOverride, restorePromptDefault } from "../api/prompts";
+import { getModelFamily, modelFamilyLabel } from "../api/modelFamily";
 
 export interface PromptEditModalProps {
   /** The effect being edited. */
@@ -33,18 +34,20 @@ type Status = "idle" | "saving" | "restoring" | "error";
 
 export function PromptEditModal({ effectId, onClose }: PromptEditModalProps) {
   const effect = findEffect(effectId);
-  const [text, setText] = useState<string>(() => getPromptForEffect(effectId));
+  // Prompts are kept per model family; edit the one the current endpoint uses.
+  const [family] = useState(getModelFamily);
+  const [text, setText] = useState<string>(() => getPromptForEffect(effectId, family));
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
 
   const busy = status === "saving" || status === "restoring";
-  const isDefault = text.trim() === getDefaultPromptForEffect(effectId).trim();
+  const isDefault = text.trim() === getDefaultPromptForEffect(effectId, family).trim();
 
   const handleSave = async () => {
     setStatus("saving");
     setError(null);
     try {
-      await savePromptOverride(effectId, text);
+      await savePromptOverride(effectId, text, "admin", family);
       onClose();
     } catch (err) {
       setStatus("error");
@@ -56,8 +59,8 @@ export function PromptEditModal({ effectId, onClose }: PromptEditModalProps) {
     setStatus("restoring");
     setError(null);
     try {
-      await restorePromptDefault(effectId);
-      setText(getDefaultPromptForEffect(effectId));
+      await restorePromptDefault(effectId, "admin", family);
+      setText(getDefaultPromptForEffect(effectId, family));
       onClose();
     } catch (err) {
       setStatus("error");
@@ -81,7 +84,8 @@ export function PromptEditModal({ effectId, onClose }: PromptEditModalProps) {
       >
         <h2 className="prompt-modal__title">Edit prompt — {effect?.label ?? effectId}</h2>
         <p className="prompt-modal__hint">
-          This prompt is used for everyone. {isDefault ? "Currently the default." : "Customized."}
+          This {modelFamilyLabel(family)} prompt is used for everyone while a {modelFamilyLabel(family)} endpoint is
+          current. {isDefault ? "Currently the default." : "Customized."}
         </p>
         <textarea
           className="prompt-modal__textarea"

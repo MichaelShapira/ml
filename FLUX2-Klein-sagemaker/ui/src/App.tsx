@@ -20,6 +20,7 @@ import { BoothFlow } from "./booth/BoothFlow";
 import { AdminTab } from "./admin/AdminTab";
 import { ConnectionIndicator, TouchButton } from "./theme";
 import { loadEffectPrompts } from "./api/prompts";
+import { refreshModelFamily } from "./api/modelFamily";
 
 type Tab = "booth" | "admin";
 
@@ -44,6 +45,9 @@ export default function App() {
     void loadEffectPrompts().catch(() => {
       /* fall back to catalog defaults */
     });
+    // Which model the current endpoint config serves (FLUX.2 or FLUX 3), so the
+    // admin prompt editor opens on the right prompt. Generation re-reads it.
+    void refreshModelFamily();
   }, [isAuthenticated]);
 
   if (!isAuthenticated) {

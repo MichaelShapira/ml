@@ -21,6 +21,7 @@ import {
 
 import { getSageMakerClient, withAuthRetry } from "./awsClients";
 import { EndpointStatus, mapStatus, canStart, canStop } from "./statusMap";
+import { setModelFamilyFromConfig } from "./modelFamily";
 import { putWorkingHours, listWorkingHours, deleteWorkingHours, getCurrentConfigName, setCurrentConfigName, listManagedConfigs, addManagedConfig, removeManagedConfig } from "./schedule";
 import {
   nowInScheduleTz,
@@ -194,6 +195,8 @@ export async function listManagedConfigsWithStatus(): Promise<EndpointConfigSumm
       // Non-fatal: the badge just may not persist.
     }
   }
+  // Keep the booth's prompt dialect in step with the current config.
+  setModelFamilyFromConfig(current);
 
   return Promise.all(
     names.map(async (name) => ({
@@ -224,6 +227,7 @@ export async function removeConfig(configName: string): Promise<void> {
  */
 export async function makeConfigCurrent(configName: string): Promise<void> {
   await setCurrentConfigName(configName);
+  setModelFamilyFromConfig(configName);
 }
 
 /** Read the booth's current config name (or null when unset). */

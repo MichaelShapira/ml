@@ -235,6 +235,28 @@ Passwords that don't meet this policy are rejected when the script sets them, so
 
 Every other value has a default and can be overridden by the matching flag or environment variable (e.g. `--region`, `--sender-email`, `--endpoint-name`, `--admin-username`, `--scheduler-timezone`). Run `./deploy.sh --help` for the full list.
 
+On a re-deploy where the users already have their passwords, pass `--skip-passwords` instead of the two password flags. The script then skips the password step and nobody's password changes.
+
+### FLUX 3 Image Klein endpoint (ml.g7e.2xlarge)
+
+`deploy.sh` also prepares a second endpoint config, `FluxAiBoot-flux3-g7e`, that serves [FLUX 3 Image Klein](https://huggingface.co/black-forest-labs/flux-3-image-klein) on an `ml.g7e.2xlarge` (RTX PRO 6000 Blackwell, 96 GB). The serving code lives in [`../FLUX3-Klein-sagemaker-g7e`](../FLUX3-Klein-sagemaker-g7e), which is also a standalone notebook for testing the model without the booth.
+
+Step 5 of the script does the following, and every part is idempotent:
+
+1. **Hugging Face token.** The FLUX 3 weights are gated, so the first run asks for a Hugging Face read token (hidden input) from an account that has accepted the license. The script checks that the token can read the repo, then stores it in Secrets Manager as `AmazonSageMaker-flux3-klein-hf-token`. Later runs reuse the stored token and don't ask again. Pass `--hf-token <token>` (or `HF_TOKEN=...`) to run non-interactively or to replace the stored token. The token is passed to the AWS CLI and curl through temp files, never on a command line.
+2. **Serving code.** Uploads `serving/config.yaml` and `serving/code/` to `s3://<io-bucket>/flux3-klein-g7e/model/`.
+3. **Weights.** If `flux3-klein-g7e/model/weights/_flux3_stage.json` is missing, a CPU SageMaker Processing job copies the ~39 GB of weights from the Hub to S3 (about 10 minutes). Only this job reads the token. The endpoint loads the weights from S3 and holds no Hub credential.
+4. **Model and endpoint config.** Creates the SageMaker Model and EndpointConfig `FluxAiBoot-flux3-g7e` (AWS Ray Serve DLC `ray:serve-ml-sagemaker-cuda-v1.5.7`, inference AMI `al2023-ami-sagemaker-inference-gpu-4-1`, the booth's usual async I/O prefixes). The CDK stack creates the execution role, `Flux3SageMakerRole`. If an endpoint named `FluxAiBoot-flux3-g7e` is running, the model and config are left alone; stop the endpoint and re-run to apply changes.
+5. **Booth registration.** Adds the config to the booth's managed endpoint configs. The current config is not changed.
+
+The script does **not** start a g7e instance. To use FLUX 3, sign in as admin, open **Endpoint**, click **Make current** on `FluxAiBoot-flux3-g7e`, then **Start**. Startup takes about 5 minutes, and g7e capacity can be limited, so a start may need to be retried. Switch back by making the FLUX.2 config current again.
+
+Related flags: `--hf-token`, `--flux3-config-name`, `--flux3-instance-type` and `--skip-flux3` (skips step 5 entirely).
+
+**How the booth picks FLUX 3.** The booth reads the current config name before each generation. A name that matches `flux3` or `flux-3` (case-insensitive) selects the FLUX 3 prompts and sampling (16 steps, guidance 1); any other name keeps the FLUX.2 behaviour. A custom `--flux3-config-name` must therefore contain `flux3`, and the script rejects one that doesn't. The Endpoint tab shows which model family each config runs.
+
+**Prompts per model family.** Each effect has a FLUX.2 prompt and a FLUX 3 prompt. The FLUX 3 prompts follow Black Forest Labs' FLUX 3 editing guidance: one positive instruction that names the change, then what must stay (faces, pose, position, lighting), with the image roles stated explicitly in the two-image merge. The endpoint's prompt upsampler expands them into a full caption, so they are shorter than the FLUX.2 prompts. Prompt edits in the admin view are saved for the model family of the current config, so a FLUX.2 custom prompt and a FLUX 3 custom prompt for the same effect don't overwrite each other.
+
 ### Generated local config
 
 `deploy.sh` writes `ui/.env.local` with account-specific resource ids for local development (`npm run dev`). This file is **gitignored** and must never be committed. Python bytecode caches (`__pycache__/`) and staged model `weights/` are gitignored as well.

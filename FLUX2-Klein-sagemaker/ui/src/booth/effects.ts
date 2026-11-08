@@ -11,8 +11,43 @@
  * build.
  */
 
+import type { ModelFamily } from "../api/modelFamily";
+
 /** The two categories an Effect_Option can belong to. */
 export type EffectCategory = "background" | "person";
+
+/**
+ * FLUX 3 Image Klein prompt for a background effect.
+ *
+ * Written to Black Forest Labs' FLUX 3 editing guidance (docs.bfl.ai, "Image
+ * Editing" and "Single-Reference Editing"): one instruction that names the
+ * change and its lighting so the subject fits in, then the details that must
+ * stay, phrased positively (FLUX 3 has no negative prompt and BFL recommends
+ * describing what should be there). The endpoint's prompt upsampler sees the
+ * photo and expands this into a full caption, so the prompt stays short and the
+ * FLUX.2 composition lock is not needed.
+ *
+ * Signs, banners and text are named on purpose: with a plain "replace the
+ * background", the upsampler treated a booth banner as an overlay and kept it on
+ * the new scene (tropical and snowy-peak tests, 2026-11-08). Costume prompts say
+ * the opposite, because the upsampler otherwise rewrote the banner's wording.
+ */
+function flux3Background(scene: string): string {
+  return (
+    `Replace everything behind the people, including walls, signs, banners and any text, with ${scene}. ` +
+    "Keep every person exactly as they are, with the same face, hair, expression, clothing, pose and position, " +
+    "and light them to match the new scene. Photorealistic photograph."
+  );
+}
+
+/** FLUX 3 Image Klein prompt for a costume effect (see {@link flux3Background}). */
+function flux3Costume(costume: string): string {
+  return (
+    `Dress each person in the photo as ${costume}. ` +
+    "Keep each person's face, age, gender, skin tone, expression, pose and position, " +
+    "and keep the background, its lighting and any signs or text in it exactly as they are. Photorealistic photograph."
+  );
+}
 
 /**
  * Optional per-effect overrides for the inference request. Most effects derive
@@ -42,8 +77,13 @@ export interface EffectOption {
   category: EffectCategory;
   /** Human-readable, touch-control label. Non-empty. */
   label: string;
-  /** Prompt string mapped to Async_Request.inputs. Non-empty. */
+  /** FLUX.2 [klein] prompt mapped to Async_Request.inputs. Non-empty. */
   prompt: string;
+  /**
+   * FLUX 3 Image Klein prompt, used when the current endpoint config is a
+   * FLUX 3 one (see `api/modelFamily.ts`). Non-empty.
+   */
+  flux3Prompt: string;
   /**
    * Short noun phrase describing this effect's contribution, used when building
    * a multi-reference MERGE prompt (see {@link buildMergePrompt}). For a
@@ -85,6 +125,8 @@ export const EFFECTS: readonly EffectOption[] = [
     mergePhrase: "the interior of a futuristic spaceship",
     prompt:
       "Replace only the background with the interior of a futuristic spaceship: sleek metal corridors, glowing control panels, soft blue lighting. Keep the existing people unchanged — same faces, expressions, hair, clothing, poses, and positions — and keep exactly the same number of people as in the original photo. Do not add or remove anyone. Blend the new background naturally behind them with matching light and shadow. Photorealistic.",
+    flux3Prompt:
+      flux3Background("the interior of a futuristic spaceship: sleek metal corridors, glowing control panels and soft blue lighting"),
   },
   {
     id: "bg_colosseum",
@@ -94,6 +136,8 @@ export const EFFECTS: readonly EffectOption[] = [
     mergePhrase: "the interior of the ancient Roman Colosseum under a dramatic sky",
     prompt:
       "Replace only the background with the interior of the ancient Roman Colosseum under a dramatic sky. Keep the existing people unchanged — same faces, expressions, hair, clothing, poses, and positions — and keep exactly the same number of people as in the original photo. Do not add or remove anyone. Blend the new background naturally behind them with matching light and shadow. Photorealistic, cinematic lighting.",
+    flux3Prompt:
+      flux3Background("the inside of the ancient Roman Colosseum under a dramatic sky, lit by warm cinematic sunlight"),
   },
   {
     id: "bg_tropical",
@@ -103,6 +147,8 @@ export const EFFECTS: readonly EffectOption[] = [
     mergePhrase: "a sunlit tropical beach with palm trees and turquoise water",
     prompt:
       "Replace only the background with a sunlit tropical beach: palm trees, turquoise water, white sand. Keep the existing people unchanged — same faces, expressions, hair, clothing, poses, and positions — and keep exactly the same number of people as in the original photo. Do not add or remove anyone. Blend the new background naturally behind them with matching light and shadow. Photorealistic.",
+    flux3Prompt:
+      flux3Background("a sunlit tropical beach with palm trees, turquoise water and white sand"),
   },
   {
     id: "bg_snowy_peak",
@@ -112,6 +158,8 @@ export const EFFECTS: readonly EffectOption[] = [
     mergePhrase: "a snowy mountain summit under a crisp blue sky",
     prompt:
       "Replace only the background with a snowy mountain summit under a crisp blue sky, distant peaks and drifting snow. Keep the existing people unchanged — same faces, expressions, hair, clothing, poses, and positions — and keep exactly the same number of people as in the original photo. Do not add or remove anyone. Blend the new background naturally behind them with matching light and shadow. Photorealistic.",
+    flux3Prompt:
+      flux3Background("a snowy mountain summit under a crisp blue sky, with distant peaks and drifting snow"),
   },
   {
     id: "bg_neon_city",
@@ -121,6 +169,8 @@ export const EFFECTS: readonly EffectOption[] = [
     mergePhrase: "a neon-lit city street at night with rain-slick pavement",
     prompt:
       "Replace only the background with a neon-lit city street at night, rain-slick pavement reflecting pink and blue signage. Keep the existing people unchanged — same faces, expressions, hair, clothing, poses, and positions — and keep exactly the same number of people as in the original photo. Do not add or remove anyone. Blend the new background naturally behind them with matching light and shadow. Cinematic, photorealistic.",
+    flux3Prompt:
+      flux3Background("a neon-lit city street at night, with rain-slick pavement reflecting pink and blue signs"),
   },
   {
     id: "bg_enchanted_forest",
@@ -130,6 +180,8 @@ export const EFFECTS: readonly EffectOption[] = [
     mergePhrase: "an enchanted forest with glowing fireflies and shafts of magical light",
     prompt:
       "Replace only the background with an enchanted forest: glowing fireflies, mossy ancient trees, shafts of magical light. Keep the existing people unchanged — same faces, expressions, hair, clothing, poses, and positions — and keep exactly the same number of people as in the original photo. Do not add or remove anyone. Blend the new background naturally behind them with matching light and shadow. Photorealistic, fantasy.",
+    flux3Prompt:
+      flux3Background("an enchanted forest with mossy ancient trees, glowing fireflies and shafts of soft magical light"),
   },
   {
     id: "bg_medieval_castle",
@@ -139,6 +191,8 @@ export const EFFECTS: readonly EffectOption[] = [
     mergePhrase: "the interior of a grand medieval castle with stone walls and torch-lit halls",
     prompt:
       "Replace only the background with the interior of a grand medieval castle: stone walls, torch-lit halls, hanging banners, and a high vaulted ceiling. Keep the existing people unchanged — same faces, expressions, hair, clothing, poses, and positions — and keep exactly the same number of people as in the original photo. Do not add or remove anyone. Blend the new background naturally behind them with matching light and shadow. Photorealistic, cinematic lighting.",
+    flux3Prompt:
+      flux3Background("the interior of a grand medieval castle: stone walls, torch-lit halls, hanging banners and a high vaulted ceiling"),
   },
   {
     id: "bg_lunar",
@@ -148,6 +202,8 @@ export const EFFECTS: readonly EffectOption[] = [
     mergePhrase: "a barren lunar landscape on the surface of the Moon with grey cratered terrain and Earth on the horizon",
     prompt:
       "Replace only the background with a barren lunar landscape on the surface of the Moon: grey cratered terrain, a black star-filled sky, and the distant Earth rising on the horizon. Keep the existing people unchanged — same faces, expressions, hair, clothing, poses, and positions — and keep exactly the same number of people as in the original photo. Do not add or remove anyone. Blend the new background naturally behind them with matching light and shadow. Photorealistic.",
+    flux3Prompt:
+      flux3Background("a barren lunar landscape on the Moon: grey cratered ground, a black star-filled sky and the Earth rising on the horizon"),
   },
 
   // --- Person (6) ---
@@ -164,6 +220,8 @@ export const EFFECTS: readonly EffectOption[] = [
     mergePhrase: "a Viking warrior outfit — a fur cloak with leather and iron armor and Norse braids",
     prompt:
       "Keep the exact same people from the original photo — the same number of people, same faces, same positions; do not add, remove, or duplicate anyone. Change only their clothing: dress each existing person as a Viking warrior in a fur cloak with leather and iron armor and subtle war paint, with hair in Norse braids that suit them. Keep each person's face, gender, age, skin tone, expression, and pose unchanged, and keep the original background unchanged. Match the original lighting. Photorealistic.",
+    flux3Prompt:
+      flux3Costume("a Viking warrior, in a fur cloak over leather and iron armor, with subtle war paint and Norse braids that suit their hair"),
   },
   {
     id: "person_roman_emperor",
@@ -173,6 +231,8 @@ export const EFFECTS: readonly EffectOption[] = [
     mergePhrase: "ancient Roman royal attire — a white and gold toga with a golden laurel wreath",
     prompt:
       "Keep the exact same people from the original photo — the same number of people, same faces, same positions; do not add, remove, or duplicate anyone. Change only their clothing: dress each existing person as ancient Roman royalty in a white and gold toga with a golden laurel wreath. Keep each person's face, gender, age, skin tone, expression, and pose unchanged, and keep the original background unchanged. Match the original lighting. Photorealistic.",
+    flux3Prompt:
+      flux3Costume("ancient Roman royalty, in a white and gold toga with a golden laurel wreath"),
   },
   {
     id: "person_astronaut",
@@ -182,6 +242,8 @@ export const EFFECTS: readonly EffectOption[] = [
     mergePhrase: "a detailed white astronaut spacesuit with the helmet open so the face stays visible",
     prompt:
       "Keep the exact same people from the original photo — the same number of people, same faces, same positions; do not add, remove, or duplicate anyone. Change only their clothing: dress each existing person in a detailed white astronaut spacesuit with the helmet open so their face stays fully visible. Keep each person's face, gender, age, skin tone, expression, and pose unchanged, and keep the original background unchanged. Match the original lighting. Photorealistic.",
+    flux3Prompt:
+      flux3Costume("an astronaut, in a detailed white spacesuit with the helmet open and the face fully visible"),
   },
   {
     id: "person_renaissance",
@@ -191,6 +253,8 @@ export const EFFECTS: readonly EffectOption[] = [
     mergePhrase: "Renaissance noble attire in rich velvet and lace period clothing",
     prompt:
       "Keep the exact same people from the original photo — the same number of people, same faces, same positions; do not add, remove, or duplicate anyone. Change only their clothing: dress each existing person as a Renaissance noble in rich velvet and lace period attire, like a classical oil painting. Keep each person's face, gender, age, skin tone, expression, and pose unchanged, and keep the original background unchanged. Match the original lighting.",
+    flux3Prompt:
+      flux3Costume("a Renaissance noble, in rich velvet and lace period clothing"),
   },
   {
     id: "person_cyberpunk",
@@ -200,6 +264,8 @@ export const EFFECTS: readonly EffectOption[] = [
     mergePhrase: "a cyberpunk hacker outfit — a neon-accented jacket with an augmented-reality visor and glowing tattoos",
     prompt:
       "Keep the exact same people from the original photo — the same number of people, same faces, same positions; do not add, remove, or duplicate anyone. Change only their clothing: dress each existing person as a cyberpunk hacker in a neon-accented jacket with an augmented-reality visor and glowing tattoos. Keep each person's face, gender, age, skin tone, expression, and pose unchanged, and keep the original background unchanged. Match the original lighting. Photorealistic.",
+    flux3Prompt:
+      flux3Costume("a cyberpunk hacker, in a neon-accented jacket with glowing tattoos and an augmented-reality visor pushed up on the forehead"),
   },
   {
     id: "person_knight",
@@ -209,6 +275,8 @@ export const EFFECTS: readonly EffectOption[] = [
     mergePhrase: "a medieval knight's polished plate armor with a surcoat",
     prompt:
       "Keep the exact same people from the original photo — the same number of people, same faces, same positions; do not add, remove, or duplicate anyone. Change only their clothing: dress each existing person as a medieval knight in polished plate armor with a surcoat. Keep each person's face, gender, age, skin tone, expression, and pose unchanged, and keep the original background unchanged. Match the original lighting. Photorealistic.",
+    flux3Prompt:
+      flux3Costume("a medieval knight, in polished plate armor with a surcoat, head bare and the face fully visible"),
   },
   // Official evening: the SAME working template as the costume effects above —
   // identical opening ("keep the exact same people … do not add, remove, or
@@ -235,6 +303,11 @@ export const EFFECTS: readonly EffectOption[] = [
       "elegant, formal attire suitable for an official evening event",
     prompt:
       "Keep the exact same people from the original photo — the same number of people, same faces, same positions; do not add, remove, or duplicate anyone. Change only their clothing: dress each existing person in elegant, formal attire suitable for an official evening event. Lightly retouch the skin to gently soften temporary blemishes, spots, and shine while keeping natural skin texture. Keep each person's face, gender, age, skin tone, expression, and pose unchanged, and keep the original background unchanged. Match the original lighting. Photorealistic.",
+    flux3Prompt:
+      "Dress each person in the photo in elegant formal attire for an official evening event, and lightly retouch the skin to " +
+      "soften temporary blemishes and shine while keeping its natural texture. Keep each person's face, age, gender, skin tone, " +
+      "expression, pose and position, and keep the background, its lighting and any signs or text in it exactly as they are. " +
+      "Photorealistic photograph.",
   },
 ];
 
@@ -274,46 +347,52 @@ export function findEffect(effectId: string): EffectOption | undefined {
  * catalog default below — so changing a default in this file is always honored
  * and never shadowed by a stale seed in DynamoDB.
  */
-let promptOverrides: ReadonlyMap<string, string> = new Map();
+const promptOverrides: Record<ModelFamily, ReadonlyMap<string, string>> = {
+  flux2: new Map(),
+  flux3: new Map(),
+};
 
 /**
  * Replace the in-memory admin prompt-override registry. Called once after the
  * SPA loads the effect prompts from DynamoDB, and again after an admin saves or
  * restores a prompt, so the very next generation uses the new value.
  */
-export function applyPromptOverrides(overrides: ReadonlyMap<string, string>): void {
-  promptOverrides = new Map(overrides);
+export function applyPromptOverrides(
+  overrides: ReadonlyMap<string, string>,
+  family: ModelFamily = "flux2",
+): void {
+  promptOverrides[family] = new Map(overrides);
 }
 
-/** The current admin prompt overrides (read-only view, for the admin UI). */
-export function getPromptOverrides(): ReadonlyMap<string, string> {
-  return promptOverrides;
+/** The admin prompt overrides for one family (read-only view, for the admin UI). */
+export function getPromptOverrides(family: ModelFamily = "flux2"): ReadonlyMap<string, string> {
+  return promptOverrides[family];
 }
 
 /**
  * The built-in catalog default prompt for an effect (ignores any admin
- * override). This is the single source of truth for "restore to default" and
- * for the booth fallback. Rejects unknown ids.
+ * override) for a model family. This is the single source of truth for
+ * "restore to default" and for the booth fallback. Rejects unknown ids.
  */
-export function getDefaultPromptForEffect(effectId: string): string {
+export function getDefaultPromptForEffect(effectId: string, family: ModelFamily = "flux2"): string {
   const effect = EFFECTS_BY_ID.get(effectId);
   if (effect === undefined) {
     throw new UnknownEffectError(effectId);
   }
-  return effect.prompt;
+  return family === "flux3" ? effect.flux3Prompt : effect.prompt;
 }
 
 /**
- * Resolve an effect id to its effective prompt, rejecting unknown ids. Uses the
- * admin override when one is set (see {@link applyPromptOverrides}); otherwise
- * the catalog default.
+ * Resolve an effect id to its effective prompt for a model family, rejecting
+ * unknown ids. Uses that family's admin override when one is set (see
+ * {@link applyPromptOverrides}); otherwise the family's catalog default.
  */
-export function getPromptForEffect(effectId: string): string {
+export function getPromptForEffect(effectId: string, family: ModelFamily = "flux2"): string {
   const effect = EFFECTS_BY_ID.get(effectId);
   if (effect === undefined) {
     throw new UnknownEffectError(effectId);
   }
-  return promptOverrides.get(effectId) ?? effect.prompt;
+  return promptOverrides[family].get(effectId) ?? getDefaultPromptForEffect(effectId, family);
 }
 
 /**
@@ -350,7 +429,8 @@ export function slotForCategory(category: EffectCategory): "background" | "perso
  * Build the multi-reference MERGE prompt that combines a background result with
  * a character result into a single image.
  *
- * Follows Black Forest Labs' multi-reference prompting guidance for FLUX.2:
+ * `family` picks the prompt dialect; the FLUX.2 text below is unchanged. For
+ * FLUX.2 it follows Black Forest Labs' multi-reference prompting guidance:
  * reference each image explicitly ("image 1", "image 2") and describe each
  * image's role. By convention the caller submits the background result as image
  * 1 and the character result as image 2.
@@ -368,6 +448,7 @@ export function slotForCategory(category: EffectCategory): "background" | "perso
 export function buildMergePrompt(
   backgroundEffectId: string,
   personEffectId: string,
+  family: ModelFamily = "flux2",
 ): string {
   const bg = EFFECTS_BY_ID.get(backgroundEffectId);
   const person = EFFECTS_BY_ID.get(personEffectId);
@@ -376,6 +457,21 @@ export function buildMergePrompt(
   }
   if (person === undefined) {
     throw new UnknownEffectError(personEffectId);
+  }
+  if (family === "flux3") {
+    // FLUX 3 multi-reference guidance (docs.bfl.ai, "Multi-Reference Editing"):
+    // refer to each image by position, say what each supplies, say how the
+    // pieces relate, and put the base image first. Image 1 already shows the
+    // person on the new background at the right place and light, so the merge
+    // is a replacement edit of image 1: each person is swapped for the same
+    // person from image 2. Phrased as a replacement (not "do not duplicate"),
+    // which FLUX 3 reads more reliably than a negation.
+    return (
+      `In image 1, replace each person with the same person from image 2, wearing ${person.mergePhrase}. ` +
+      "Keep each person's face, hair, expression and pose from image 2, standing where they stand in image 1. " +
+      `Keep the background of image 1 (${bg.mergePhrase}) and its lighting, and light the people to match it. ` +
+      "Photorealistic photograph."
+    );
   }
   return (
     // One-person lock FIRST (earliest tokens weighted most).

@@ -1,0 +1,23 @@
+# Installed by the Ray Serve SageMaker DLC entrypoint (pip install -r) before Ray starts.
+#
+# Base image: 763104351884.dkr.ecr.<region>.amazonaws.com/ray:serve-ml-sagemaker-cuda-v1.5.7
+#   Python 3.13, PyTorch 2.10.0 (CUDA 12.8 wheels, Blackwell sm_120 kernels), CUDA 12.9.1 runtime,
+#   Transformers 5.19.0, huggingface-hub 1.33.0 + hf-xet 1.7.0, safetensors 0.8.0, Pillow 13.0.0, Ray 2.59.0.
+#
+# Guard pins: already in the image, listed so pip fails loudly instead of swapping them if a
+# dependency ever asks for another version. Keep them equal to the image tag pinned in the notebook.
+torch==2.10.0
+transformers==5.19.0
+huggingface-hub==1.33.0
+safetensors==0.8.0
+pillow==13.0.0
+#
+# Added on top of the image (all pure-Python wheels except psutil, pulled in by accelerate):
+# FLUX 3 Image Klein's modular pipeline (Flux3DistilledModularPipeline + the prompt upsampler block)
+# first shipped in diffusers 0.42.0; 0.42.1 is the release the Diffusers FLUX 3 docs are written for.
+diffusers==0.42.1
+accelerate==1.15.0
+# Triton kernels for Qwen3.5's gated-delta-rule layers (the prompt upsampler). Without them Transformers
+# falls back to its reference torch implementation, which it documents as an order of magnitude slower.
+flash-linear-attention==0.6.0
+fla-core==0.6.0

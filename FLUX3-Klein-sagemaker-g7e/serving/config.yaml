@@ -1,0 +1,26 @@
+# Ray Serve config read by the AWS Ray Serve SageMaker DLC: its entrypoint runs
+# `serve run /opt/ml/model/config.yaml` after installing code/requirements.txt, with
+# /opt/ml/model/code on PYTHONPATH. SageMaker's /invocations is proxied to route "/".
+# No http_options here: the entrypoint already started Serve on 0.0.0.0:8000.
+applications:
+  - name: flux3
+    route_prefix: /
+    import_path: flux3_app:app
+    logging_config:
+      log_level: INFO
+      enable_access_log: false
+    deployments:
+      - name: Flux3Klein
+        num_replicas: 1
+        # One request at a time per GPU; SageMaker async queues the rest
+        # (MaxConcurrentInvocationsPerInstance=1 in the endpoint config).
+        max_ongoing_requests: 1
+        # Loading ~39 GB plus warmup takes a few minutes; generation runs in a
+        # worker thread, so health checks keep answering while a request runs.
+        health_check_period_s: 30
+        health_check_timeout_s: 120
+        graceful_shutdown_wait_loop_s: 2
+        graceful_shutdown_timeout_s: 120
+        ray_actor_options:
+          num_gpus: 1
+          num_cpus: 6

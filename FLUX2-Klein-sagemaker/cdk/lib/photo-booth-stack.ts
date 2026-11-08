@@ -22,6 +22,7 @@ import { IoBucketCorsConstruct } from "./io-bucket-cors-construct";
 import { InvokeConstruct } from "./invoke-construct";
 import { PromptSeedConstruct } from "./prompt-seed-construct";
 import { CostAllocationTagConstruct } from "./cost-allocation-tag-construct";
+import { Flux3Construct, FLUX3_HF_TOKEN_SECRET_NAME, FLUX3_PREFIX } from "./flux3-construct";
 
 /** Default SageMaker endpoint configuration name the admin/scheduler `CreateEndpoint` uses. */
 const DEFAULT_ENDPOINT_CONFIG_NAME = "flux2-klein-9b-g6e2-config";
@@ -274,6 +275,14 @@ export class PhotoBoothStack extends Stack {
     });
 
     // -------------------------------------------------------------------------
+    // 5c. FLUX 3 Image Klein (g7e) — the SageMaker execution role deploy.sh uses
+    //     for the FLUX 3 Model and its weight-staging job. deploy.sh creates the
+    //     Model + EndpointConfig (FluxAiBoot-flux3-g7e) after this stack, and
+    //     the admin starts the endpoint from the booth like any other config.
+    // -------------------------------------------------------------------------
+    const flux3 = new Flux3Construct(this, "Flux3", { ioBucket: data.ioBucket });
+
+    // -------------------------------------------------------------------------
     // 6. UI deployment — push the built SPA + injected runtime config into the
     //    UI_Bucket behind CloudFront (Requirements 22.2, 24.2, 24.4). The
     //    runtime config carries the ids/names the browser needs to call AWS
@@ -373,6 +382,18 @@ export class PhotoBoothStack extends Stack {
     new CfnOutput(this, "EndpointConfigNameOutput", {
       description: "SageMaker endpoint configuration name used by CreateEndpoint.",
       value: endpointConfigName.valueAsString,
+    });
+    new CfnOutput(this, "Flux3SageMakerRoleArn", {
+      description: "Execution role deploy.sh uses for the FLUX 3 Image Klein model and weight-staging job.",
+      value: flux3.role.roleArn,
+    });
+    new CfnOutput(this, "Flux3ModelS3Uri", {
+      description: "S3 prefix mirrored to /opt/ml/model for the FLUX 3 endpoint (config, code, staged weights).",
+      value: `s3://${data.ioBucket.bucketName}/${FLUX3_PREFIX}model/`,
+    });
+    new CfnOutput(this, "Flux3HfTokenSecretName", {
+      description: "Secrets Manager name deploy.sh stores the Hugging Face token under (weight staging only).",
+      value: FLUX3_HF_TOKEN_SECRET_NAME,
     });
     new CfnOutput(this, "InvokeFunctionUrl", {
       description:

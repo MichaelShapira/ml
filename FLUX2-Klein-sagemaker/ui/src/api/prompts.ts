@@ -5,7 +5,12 @@
  * the shared Schedule_Store DynamoDB table (single-table design) under a
  * dedicated partition, separate from Working_Hours and the managed-config items:
  *
- *   pk = "PROMPT#OVERRIDE", sk = "EFFECT#<effectId>"
+ *   pk = "PROMPT#OVERRIDE", sk = "EFFECT#<effectId>"          (FLUX.2 prompts)
+ *   pk = "PROMPT#OVERRIDE", sk = "EFFECT#<effectId>#flux3"    (FLUX 3 prompts)
+ *
+ * The two models want different prompt dialects, so an override is kept per
+ * model family (`api/modelFamily.ts`). Rows without a `family` attribute are
+ * the original FLUX.2 rows.
  *
  * Each item records the admin-edited `prompt`, an `isCustom` flag, and audit
  * fields. The booth treats a row as an override ONLY when `isCustom === true`;
@@ -31,13 +36,14 @@ import {
   findEffect,
   getDefaultPromptForEffect,
 } from "../booth/effects";
+import type { ModelFamily } from "./modelFamily";
 
 /** Partition key under which all per-effect prompt overrides live. */
 export const PROMPT_OVERRIDE_PK = "PROMPT#OVERRIDE";
 
-/** Build the sort key for an effect's prompt-override item. */
-export function promptOverrideSk(effectId: string): string {
-  return `EFFECT#${effectId}`;
+/** Build the sort key for an effect's prompt-override item in one family. */
+export function promptOverrideSk(effectId: string, family: ModelFamily = "flux2"): string {
+  return family === "flux3" ? `EFFECT#${effectId}#flux3` : `EFFECT#${effectId}`;
 }
 
 /** The shape persisted per effect in the Schedule_Store. */
@@ -45,6 +51,8 @@ interface PromptOverrideItem {
   pk: string;
   sk: string;
   effectId: string;
+  /** Model family the prompt is for; absent on the original FLUX.2 rows. */
+  family?: ModelFamily;
   /** The prompt text (admin-edited when `isCustom`, else the seeded default). */
   prompt: string;
   /** True only when an admin has explicitly customized this effect's prompt. */
@@ -55,15 +63,18 @@ interface PromptOverrideItem {
 
 /**
  * Load all persisted prompt rows and push the custom ones into the booth's
- * in-memory override registry (so the next generation uses them). Returns the
- * map of effectId → prompt for every CUSTOM override (non-custom rows are
- * ignored, matching the booth's runtime behavior).
+ * in-memory override registry (so the next generation uses them). Returns, per
+ * model family, the map of effectId → prompt for every CUSTOM override
+ * (non-custom rows are ignored, matching the booth's runtime behavior).
  *
  * Best-effort: callers should treat a thrown error as "no overrides" and fall
  * back to catalog defaults (e.g. when a standard user's role lacks the read).
  */
-export async function loadEffectPrompts(): Promise<Map<string, string>> {
-  const overrides = new Map<string, string>();
+export async function loadEffectPrompts(): Promise<Record<ModelFamily, Map<string, string>>> {
+  const overrides: Record<ModelFamily, Map<string, string>> = {
+    flux2: new Map(),
+    flux3: new Map(),
+  };
   try {
     const config = getConfig();
     const doc = getDynamoClient();
@@ -89,21 +100,23 @@ export async function loadEffectPrompts(): Promise<Map<string, string>> {
         // Ignore rows for effect ids the current build no longer knows about.
         findEffect(item.effectId) !== undefined
       ) {
-        overrides.set(item.effectId, item.prompt);
+        overrides[item.family === "flux3" ? "flux3" : "flux2"].set(item.effectId, item.prompt);
       }
     }
   } catch {
     // Swallow — fall back to catalog defaults. Do not sign the user out.
   }
-  applyPromptOverrides(overrides);
+  applyPromptOverrides(overrides.flux2, "flux2");
+  applyPromptOverrides(overrides.flux3, "flux3");
   return overrides;
 }
 
-/** Write an admin-customized prompt for an effect, then refresh the registry. */
+/** Write an admin-customized prompt for an effect in one family, then refresh the registry. */
 export async function savePromptOverride(
   effectId: string,
   prompt: string,
   updatedBy = "admin",
+  family: ModelFamily = "flux2",
 ): Promise<void> {
   if (findEffect(effectId) === undefined) {
     throw new Error(`Unknown effectId: ${JSON.stringify(effectId)}`);
@@ -112,7 +125,7 @@ export async function savePromptOverride(
   if (trimmed.length === 0) {
     throw new Error("Prompt must not be empty.");
   }
-  await putItem(effectId, trimmed, true, updatedBy);
+  await putItem(effectId, trimmed, true, updatedBy, family);
 }
 
 /**
@@ -123,9 +136,10 @@ export async function savePromptOverride(
 export async function restorePromptDefault(
   effectId: string,
   updatedBy = "admin",
+  family: ModelFamily = "flux2",
 ): Promise<void> {
-  const def = getDefaultPromptForEffect(effectId); // throws on unknown id
-  await putItem(effectId, def, false, updatedBy);
+  const def = getDefaultPromptForEffect(effectId, family); // throws on unknown id
+  await putItem(effectId, def, false, updatedBy, family);
 }
 
 /** Internal: upsert a prompt row and refresh the in-memory override registry. */
@@ -134,13 +148,15 @@ async function putItem(
   prompt: string,
   isCustom: boolean,
   updatedBy: string,
+  family: ModelFamily,
 ): Promise<void> {
   const config = getConfig();
   const doc = getDynamoClient();
   const item: PromptOverrideItem = {
     pk: PROMPT_OVERRIDE_PK,
-    sk: promptOverrideSk(effectId),
+    sk: promptOverrideSk(effectId, family),
     effectId,
+    ...(family === "flux3" ? { family } : {}),
     prompt,
     isCustom,
     updatedAt: new Date().toISOString(),

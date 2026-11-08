@@ -4,7 +4,7 @@ import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as iam from "aws-cdk-lib/aws-iam";
 import type * as s3 from "aws-cdk-lib/aws-s3";
 import type * as dynamodb from "aws-cdk-lib/aws-dynamodb";
-import { PROMPT_OVERRIDE_PK } from "./data-construct";
+import { CURRENT_CONFIG_PK, PROMPT_OVERRIDE_PK } from "./data-construct";
 
 /**
  * The S3 prefixes used by the existing FLUX.2 async inference endpoint.
@@ -337,6 +337,21 @@ export class AuthConstruct extends Construct {
         conditions: {
           "ForAllValues:StringEquals": {
             "dynamodb:LeadingKeys": [PROMPT_OVERRIDE_PK],
+          },
+        },
+      }),
+      // Read the single current-config pointer item, so the booth knows which
+      // model (FLUX.2 or FLUX 3) the current endpoint serves and builds the
+      // matching prompt and sampling (ui/src/api/modelFamily.ts). GetItem
+      // only, and only that partition: no Working_Hours, no managed list.
+      new iam.PolicyStatement({
+        sid: "ReadCurrentConfig",
+        effect: iam.Effect.ALLOW,
+        actions: ["dynamodb:GetItem"],
+        resources: [scheduleTableArn],
+        conditions: {
+          "ForAllValues:StringEquals": {
+            "dynamodb:LeadingKeys": [CURRENT_CONFIG_PK],
           },
         },
       }),

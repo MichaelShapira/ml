@@ -31,6 +31,13 @@ export const FAILURES_PREFIX = "flux2-klein-failures/";
  */
 export const PROMPT_OVERRIDE_PK = "PROMPT#OVERRIDE";
 
+/**
+ * Partition key of the booth's current-config pointer (pk = sk =
+ * "CONFIG#CURRENT", attribute `configName`). Mirrors
+ * `backend/src/lib/current-config.ts` and `ui/src/api/modelFamily.ts`.
+ */
+export const CURRENT_CONFIG_PK = "CONFIG#CURRENT";
+
 export interface DataConstructProps {
   /**
    * The name of the managed SageMaker endpoint. Used to derive the endpoint ARN

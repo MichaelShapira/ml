@@ -29,6 +29,7 @@ import {
   statusLabel,
   type EndpointConfigSummary,
 } from "../api/endpoints";
+import { modelFamilyForConfig, modelFamilyLabel } from "../api/modelFamily";
 
 type LoadState =
   | { kind: "loading" }
@@ -316,6 +317,12 @@ export function EndpointPanel() {
                 </div>
                 <div className="endpoint-config__status">
                   Status: {statusLabel(c.status)}
+                </div>
+                <div
+                  className="endpoint-config__model"
+                  data-testid={`model-${c.name}`}
+                >
+                  Model: {modelFamilyLabel(modelFamilyForConfig(c.name))}
                 </div>
                 <div className="endpoint-config__actions">
                   {!c.isCurrent && (
